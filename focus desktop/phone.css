@@ -1,0 +1,72 @@
+#phone-prompt, .phone-pair-card { background: #121214; border: 1px solid #2d2f35; border-radius: 1rem; padding: 1.5rem; }
+#phone-prompt { text-align: center; }
+#connect-phone-btn, .phone-connect-button { background: #C2410C; border-radius: .65rem; padding: .65rem 1rem; color: white; font-weight: 600; }
+#connect-phone-btn:hover, .phone-connect-button:hover { background: #D95D13; }
+#phone-prompt[hidden], #phone-modes[hidden], #phone-rules[hidden], #pair-modal [hidden] { display: none; }
+.phone-pair-card { position: relative; width: min(100%, 26rem); color: white; text-align: center; }
+.phone-pair-card h2 { font-size: 1.2rem; font-weight: 600; }
+.phone-pair-card p { margin-top: .5rem; font-size: .85rem; color: #a3a3a3; }
+.phone-close { position: absolute; top: .65rem; right: .9rem; font-size: 1.5rem; }
+.phone-qr-stage { min-height: 256px; display: grid; align-content: center; justify-items: center; }
+.phone-spinner { width: 2rem; height: 2rem; border: 3px solid #38383c; border-top-color: #C2410C; border-radius: 50%; animation: phone-spin .7s linear infinite; }
+@keyframes phone-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .phone-spinner { animation: none; } }
+
+#installed-app-list {
+  max-height: min(500px, 52vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #504640 #1a1b1f;
+  scrollbar-gutter: stable;
+  padding-right: .25rem;
+}
+#installed-app-list::-webkit-scrollbar { display: block; width: 6px; }
+#installed-app-list::-webkit-scrollbar-thumb { background: #504640; border-radius: 8px; }
+
+input.phone-app-switch[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  width: 36px;
+  height: 21px;
+  flex: 0 0 36px;
+  border: 1px solid #49494f;
+  border-radius: 999px;
+  background: #303037;
+  cursor: pointer;
+  transition: background-color .18s, border-color .18s;
+}
+input.phone-app-switch[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #eee;
+  transition: transform .18s;
+}
+input.phone-app-switch[type="checkbox"]:checked {
+  background: #D95D13;
+  border-color: #D95D13;
+  background-image: none;
+}
+input.phone-app-switch[type="checkbox"]:checked::before { transform: translateX(15px); }
+input.phone-app-switch[type="checkbox"]:focus-visible { outline: 2px solid #D95D13; outline-offset: 3px; }
+input.phone-app-switch[type="checkbox"]:disabled { opacity: .42; }
+@media (prefers-reduced-motion: reduce) {
+  input.phone-app-switch[type="checkbox"], input.phone-app-switch[type="checkbox"]::before { transition: none; }
+}
+
+#installed-app-search[type="search"] {
+  width: 100%;
+  border: 1px solid #38383f;
+  border-radius: 999px;
+  background: #1a1b1f;
+  color: #f3f4f6;
+  padding: .5rem .85rem;
+  font-size: .875rem;
+}
+#installed-app-search::placeholder { color: #a3a3a3; }
+#installed-app-search:focus-visible { outline: 2px solid #D95D13; outline-offset: 2px; }
+#installed-app-list > [hidden] { display: none; }
