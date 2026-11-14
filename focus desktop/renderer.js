@@ -5,12 +5,14 @@
   let plannedSeconds = 50 * 60;
   let isRunning = false;
   let timerInterval = null;
-  let sessionLookAways = 0;
+  let gazePaused = false;
+  const AWAY_GRACE_MS = 6000;
   let focusSessionId;
   let lastPreset = 50;
   let lockMode = "SELECTED";
-  let awayStartedAt = 0;
-  let lookAwayEmitted = false;
+  let awayStartedAt = null;
+  let lastGazeFrameAt = 0;
+
   let cameraStream = null;
   let detectTimer = null;
   let faceLandmarker = null;
@@ -20,16 +22,21 @@
   eyeHud.setAttribute("aria-hidden", "true");
   eyeHud.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:scaleX(-1);pointer-events:none";
   videoEl.after(eyeHud);
+  const gazeDebug = document.createElement("pre");
+  gazeDebug.style.cssText = "position:absolute;right:8px;bottom:8px;z-index:20;margin:0;padding:6px 8px;background:#121214e8;color:#e5e5e5;border-radius:6px;font:11px monospace;pointer-events:none";
+  videoEl.parentElement.append(gazeDebug);
   const hudContext = eyeHud.getContext("2d");
   const EYES = [
     { iris: 468, rim: [469, 470, 471, 472], contour: [33, 160, 158, 133, 153, 144] },
     { iris: 473, rim: [474, 475, 476, 477], contour: [362, 385, 387, 263, 373, 380] },
   ];
   const AWAY_THRESHOLD_FRAMES = 2;
-  const GAZE_TOLERANCE = 0.045;
+  const YAW_LIMIT_DEG = 12;
+  const PITCH_LIMIT_DEG = 12;
+  const toDegrees = radians => radians * 180 / Math.PI;
   let baselineOffset = null;
   let calibrationStartedAt = null;
-  let calibrationSum = { x: 0, y: 0, count: 0 };
+  let calibrationSum = { head: { yaw: 0, pitch: 0 }, eyes: EYES.map(() => ({ x: 0, y: 0 })), count: 0 };
   let consecutiveAwayFrames = 0;
   let lastVideoTime = -1;
   let currentDeviceId = "";
@@ -44,6 +51,8 @@
   const adjustDown = document.getElementById("adjust-down");
   const presetButtons = document.querySelectorAll(".preset-btn");
   const cameraToggle = document.getElementById("camera-toggle-input");
+  const inlineVideo = document.getElementById("presence-inline-video");
+  const inlinePlaceholder = document.getElementById("camera-placeholder");
   const cameraStage = document.getElementById("camera-stage");
   const previewPlaceholder = document.getElementById("modal-camera-placeholder");
   const cameraPreviewDialog = document.getElementById("camera-preview-dialog");
@@ -78,24 +87,29 @@
   function lockPayload() {
     return {
       mode: lockMode,
+      selectedPackages: selectedApps(),
       apps: lockMode === "FULL" ? ["*"] : selectedApps(),
     };
   }
 
   function syncPhoneRules() {
     if (!api) return;
-    const payload = lockPayload();
-    const update = payload.apps.length
-      ? api.lockPhone(payload)
-      : api.unlockPhone(payload);
-    update.catch(error => {
-      console.error("Phone lock update failed", error);
-      document.getElementById("phone-lock-error").textContent = "Could not update phone lock.";
-    });
+    const rules = lockPayload();
+    const update = rules.apps.length ? api.lockPhone(rules) : api.unlockPhone(rules);
+    update.catch(reportPhoneError);
+  }
+
+  function reportPhoneError(error) {
+    console.error("Phone lock update failed", error);
+    document.getElementById("phone-lock-error").textContent = "Could not update phone lock.";
   }
 
   function finishSession() {
+    if (!focusSessionId) return;
     focusSessionId = null;
+    gazePaused = false;
+    awayStartedAt = null;
+    document.getElementById("presence-pause-status").hidden = true;
     refreshTodayStats();
   }
 
@@ -111,15 +125,19 @@
     focusSessionId ??= crypto.randomUUID();
     isRunning = true;
     setRunningLabel(true);
-    timerInterval = setInterval(async () => {
+    timerInterval = setInterval(() => {
+      if (cameraToggle.checked && Date.now() - lastGazeFrameAt > 1500) {
+        setGaze(false);
+        if (!isRunning) return;
+      }
       if (totalSeconds > 0) {
         totalSeconds -= 1;
         api?.recordFocusTick(focusSessionId).catch(error => console.error("Focus time logging failed", error));
         updateDisplay();
-        return;
+        if (totalSeconds > 0) return;
       }
       stopClock();
-      await finishSession();
+      finishSession();
     }, 1000);
   }
 
@@ -128,25 +146,28 @@
       stopClock();
         return;
     }
+    if (gazePaused) return;
     if (totalSeconds <= 0) totalSeconds = plannedSeconds;
-    sessionLookAways = 0;
-    lookAwayEmitted = false;
-    awayStartedAt = 0;
-    if (cameraStream) resetGazeCalibration();
+
+
+    awayStartedAt = null;
+    lastGazeFrameAt = Date.now();
+    consecutiveAwayFrames = 0;
     startClock();
+    if (cameraToggle.checked && !cameraStream) startCamera(currentDeviceId);
   }
 
   function resetTimer(newSeconds = lastPreset * 60) {
     clearInterval(timerInterval);
     timerInterval = null;
     isRunning = false;
-    focusSessionId = null;
+    finishSession();
     plannedSeconds = newSeconds;
     totalSeconds = newSeconds;
-    elapsedSeconds = 0;
-    sessionLookAways = 0;
-    lookAwayEmitted = false;
-    awayStartedAt = 0;
+
+
+
+    awayStartedAt = null;
     setRunningLabel(false);
     updateDisplay();
   }
@@ -206,41 +227,29 @@
   const appsContainer = document.getElementById("apps-container");
   const lockoutContainer = document.getElementById("lockout-container");
 
-  if (modeSelectedBtn) {
-    modeSelectedBtn.addEventListener("click", () => {
-      lockMode = "SELECTED";
-      syncPhoneRules();
-      modeSelectedBtn.classList.add("bg-white/10", "text-white", "border", "border-white/10", "shadow-sm");
-      modeSelectedBtn.classList.remove("text-neutral-400");
-      if (modeLockoutBtn) {
-        modeLockoutBtn.classList.remove("bg-white/10", "text-white", "border", "border-white/10", "shadow-sm");
-        modeLockoutBtn.classList.add("text-neutral-400");
+  function showBlockMode(mode) {
+    lockMode = mode === "FULL" ? "FULL" : "SELECTED";
+    const full = lockMode === "FULL";
+    for (const [button, active] of [[modeSelectedBtn, !full], [modeLockoutBtn, full]]) {
+      for (const style of ["bg-white/10", "text-white", "border", "border-white/10", "shadow-sm"]) {
+        button.classList.toggle(style, active);
       }
-      if (appsContainer) appsContainer.classList.remove("hidden");
-      if (lockoutContainer) {
-        lockoutContainer.classList.add("hidden");
-        lockoutContainer.classList.remove("flex");
-      }
-    });
+      button.classList.toggle("text-neutral-400", !active);
+      button.setAttribute("aria-pressed", String(active));
+    }
+    appsContainer.classList.toggle("hidden", full);
+    lockoutContainer.classList.toggle("hidden", !full);
+    lockoutContainer.classList.toggle("flex", full);
   }
 
-  if (modeLockoutBtn) {
-    modeLockoutBtn.addEventListener("click", () => {
-      lockMode = "FULL";
-      syncPhoneRules();
-      modeLockoutBtn.classList.add("bg-white/10", "text-white", "border", "border-white/10", "shadow-sm");
-      modeLockoutBtn.classList.remove("text-neutral-400");
-      if (modeSelectedBtn) {
-        modeSelectedBtn.classList.remove("bg-white/10", "text-white", "border", "border-white/10", "shadow-sm");
-        modeSelectedBtn.classList.add("text-neutral-400");
-      }
-      if (appsContainer) appsContainer.classList.add("hidden");
-      if (lockoutContainer) {
-        lockoutContainer.classList.remove("hidden");
-        lockoutContainer.classList.add("flex");
-      }
-    });
-  }
+  modeSelectedBtn.addEventListener("click", () => {
+    showBlockMode("SELECTED");
+    syncPhoneRules();
+  });
+  modeLockoutBtn.addEventListener("click", () => {
+    showBlockMode("FULL");
+    syncPhoneRules();
+  });
 
   const toggleAllBtn = document.getElementById("toggle-all-btn");
   toggleAllBtn.disabled = true;
@@ -251,28 +260,68 @@
       toggles.forEach((input) => {
         input.checked = !allOn;
       });
-      toggleAllBtn.textContent = allOn ? "Select all" : "Deselect all";
       appList.dispatchEvent(new Event("change"));
     });
   }
 
   const appList = document.getElementById("installed-app-list");
   const selectedPackages = new Set();
+  const commonApps = new Map([
+    ["YouTube", "com.google.android.youtube"],
+    ["Instagram", "com.instagram.android"],
+    ["TikTok", "com.zhiliaoapp.musically"],
+    ["Reddit", "com.reddit.frontpage"],
+    ["X (Twitter)", "com.twitter.android"],
+    ["Discord", "com.discord"],
+  ]);
+  const commonButton = document.getElementById("toggle-common-apps");
+  function togglePackages(packages) {
+    const toggles = [...appList.querySelectorAll(".app-toggle")].filter(toggle => packages.includes(toggle.dataset.app));
+    if (!toggles.length) return;
+    const enable = toggles.some(toggle => !toggle.checked);
+    toggles.forEach(toggle => { toggle.checked = enable; });
+    appList.dispatchEvent(new Event("change"));
+  }
+  commonButton.disabled = true;
+  commonButton.addEventListener("click", () => togglePackages([...commonApps.values()]));
   const appSearch = document.getElementById("installed-app-search");
   const noMatchingApps = document.getElementById("installed-app-no-match");
 
+  let appFilter = "all";
+  const filterButtons = document.querySelectorAll("[data-app-filter]");
+  filterButtons.forEach(button => button.addEventListener("click", () => {
+    appFilter = button.dataset.appFilter === "all" ? "all"
+      : appFilter === "blocked" ? "unblocked" : "blocked";
+    filterButtons.forEach(tab => {
+      tab.setAttribute("aria-pressed", String(tab === button));
+      if (tab.dataset.appFilter === "blocked") {
+        tab.textContent = appFilter === "unblocked" ? "Unblocked" : "Blocked";
+        tab.title = appFilter === "blocked" ? "Show unblocked apps" : "Show blocked apps";
+      }
+    });
+    filterInstalledApps();
+  }));
+
   function filterInstalledApps() {
+    const common = [...appList.querySelectorAll(".app-toggle")].filter(toggle =>
+      [...commonApps.values()].includes(toggle.dataset.app));
+    commonButton.disabled = !common.length;
+    commonButton.textContent = common.length && common.every(toggle => toggle.checked)
+      ? "Unblock common apps" : "Select common apps";
     const query = appSearch.value.trim().toLowerCase();
     let hasMatch = false;
     for (const row of appList.children) {
-      row.hidden = !row.dataset.searchText.includes(query);
+      const blocked = row.querySelector(".app-toggle").checked;
+      row.hidden = !row.dataset.searchText.includes(query) ||
+        (appFilter !== "all" && blocked !== (appFilter === "blocked"));
       hasMatch ||= !row.hidden;
     }
-    noMatchingApps.hidden = !query || !appList.children.length || hasMatch;
+    noMatchingApps.hidden = (!query && appFilter === "all") || !appList.children.length || hasMatch;
   }
 
   appSearch.addEventListener("input", filterInstalledApps);
   appList.addEventListener("change", () => {
+    filterInstalledApps();
     selectedPackages.clear();
     selectedApps().forEach(name => selectedPackages.add(name));
     refreshTodayStats();
@@ -307,13 +356,21 @@
       requestInstalledApps();
     }
   });
-  window.addEventListener("focus:installed-apps", ({ detail: { apps, ready, error } }) => {
-    if (error) {
+  window.addEventListener("focus:installed-apps", ({ detail: { apps, ready, error, blockMode, selectedPackages: savedPackages } }) => {
+    showBlockMode(blockMode);
+    selectedPackages.clear();
+    savedPackages.forEach(pkg => selectedPackages.add(pkg));
+    if (error && !ready) {
       clearTimeout(inventoryTimer);
       appStatus.textContent = "The phone could not read its app list. Tap Refresh apps to retry.";
       return;
     }
-    if (!ready) return;
+    if (!ready) {
+      if (document.body.dataset.phoneState === "connected" && !error && !appStatus.textContent) {
+        appStatus.textContent = "Waiting for the phone’s app list…";
+      }
+      return;
+    }
     clearTimeout(inventoryTimer);
     appStatus.textContent = apps.length ? "" : "No eligible apps were found on your phone.";
     toggleAllBtn.disabled = !apps.length;
@@ -344,35 +401,38 @@
       return row;
     }));
     filterInstalledApps();
-    syncPhoneRules();
+    refreshTodayStats();
   });
 
 
-  syncPhoneRules();
 
   function setGaze(looking) {
-    const status = looking ? "Looking at Screen" : "Looking Away";
-    if (gazeLabel.textContent !== status) gazeLabel.textContent = status;
-    if (!isRunning) {
-      awayStartedAt = 0;
-      lookAwayEmitted = false;
-      return;
+    const banner = document.getElementById("presence-pause-status");
+    if (looking || (!isRunning && !gazePaused)) awayStartedAt = null;
+    else awayStartedAt ??= Date.now();
+    const elapsed = awayStartedAt === null ? 0 : Date.now() - awayStartedAt;
+    const status = looking ? "Focused" : focusSessionId
+      ? "Looking away (" + Math.min(6, Math.floor(elapsed / 1000)) + "s / 6s)"
+      : "Looking away";
+    for (const badge of [gazeLabel, document.getElementById("presence-status")]) {
+      if (badge.textContent !== status) badge.textContent = status;
+      badge.style.color = looking ? "#86efac" : "#fbbf24";
     }
-    if (looking) {
-      awayStartedAt = 0;
-      lookAwayEmitted = false;
-      return;
-    }
-    if (!awayStartedAt) awayStartedAt = Date.now();
-    if (!lookAwayEmitted && Date.now() - awayStartedAt >= 3000) {
-      lookAwayEmitted = true;
-      sessionLookAways += 1;
+    if (!looking && isRunning && elapsed >= AWAY_GRACE_MS) {
+      gazePaused = true;
       stopClock();
-      if (api) api.addLookAway();
+      banner.hidden = false;
+      api?.addLookAway().catch(console.error);
+    } else if (looking && gazePaused) {
+      gazePaused = false;
+      banner.hidden = true;
+      startClock();
     }
   }
 
+  let cameraRequest = 0;
   function stopCamera() {
+    cameraRequest++;
     if (detectTimer) {
       cancelAnimationFrame(detectTimer);
       detectTimer = null;
@@ -382,48 +442,116 @@
       cameraStream = null;
     }
     videoEl.srcObject = null;
+    inlineVideo.srcObject = null;
+    inlineVideo.hidden = true;
+    inlinePlaceholder.hidden = false;
     videoEl.hidden = true;
     previewPlaceholder.hidden = false;
     resetGazeCalibration();
     clearEyeHud();
     gazeLabel.textContent = "Camera off";
+    gazeDebug.textContent = "";
+    const badge = document.getElementById("presence-status");
+    badge.textContent = "Camera off";
+    badge.style.color = "";
   }
 
   function resetGazeCalibration() {
     baselineOffset = null;
     calibrationStartedAt = null;
-    calibrationSum = { x: 0, y: 0, count: 0 };
+    calibrationSum = { head: { yaw: 0, pitch: 0 }, eyes: EYES.map(() => ({ x: 0, y: 0 })), count: 0 };
     consecutiveAwayFrames = 0;
-    awayStartedAt = 0;
-    lookAwayEmitted = false;
+    awayStartedAt = null;
+
   }
 
   function clearEyeHud() {
     hudContext.clearRect(0, 0, eyeHud.width, eyeHud.height);
   }
 
+  function landmarkPoint(mark) {
+    return { x: mark.x * videoEl.videoWidth, y: mark.y * videoEl.videoHeight };
+  }
+
   function eyeGeometry(marks, eye) {
     const iris = marks?.[eye.iris];
     const contour = eye.contour.map(index => marks?.[index]);
     if (!iris || contour.some(point => !point)) return null;
-    const xs = contour.map(point => point.x * videoEl.videoWidth);
-    const ys = contour.map(point => point.y * videoEl.videoHeight);
-    const left = Math.min(...xs);
-    const right = Math.max(...xs);
-    const top = Math.min(...ys);
-    const bottom = Math.max(...ys);
-    const width = right - left;
+    const points = contour.map(landmarkPoint);
+    const [left, , , right] = points;
+    const width = Math.hypot(right.x - left.x, right.y - left.y);
     if (width < 1) return null;
-    const x = (left + right) / 2;
-    const y = (top + bottom) / 2;
+    // Both contours run image-left to image-right, so positive offsets agree.
+    const ux = (right.x - left.x) / width;
+    const uy = (right.y - left.y) / width;
+    const vertical = points.map(point => -(point.x - left.x) * uy + (point.y - left.y) * ux);
+    const top = Math.min(...vertical);
+    const bottom = Math.max(...vertical);
+    const height = bottom - top;
+    if (height < width * 0.10) return null;
+    const pupil = landmarkPoint(iris);
+    const x = pupil.x - left.x;
+    const y = pupil.y - left.y;
     return {
-      pupilX: iris.x * videoEl.videoWidth,
-      pupilY: iris.y * videoEl.videoHeight,
+      pupilX: pupil.x,
+      pupilY: pupil.y,
       rim: eye.rim.map(index => marks[index]).filter(Boolean),
       eyeWidth: width,
-      dx: (iris.x * videoEl.videoWidth - x) / width,
-      dy: (iris.y * videoEl.videoHeight - y) / width,
+      dx: (x * ux + y * uy) / width - 0.5,
+      dy: (-x * uy + y * ux - (top + bottom) / 2) / height,
     };
+  }
+
+  function headPose(marks) {
+    const points = [1, 234, 454, 10, 152].map(index => marks?.[index]);
+    if (points.some(point => !point)) return null;
+    const [nose, left, right, forehead, chin] = points.map(landmarkPoint);
+    const roll = Math.atan2(right.y - left.y, right.x - left.x);
+    const cos = Math.cos(roll);
+    const sin = Math.sin(roll);
+    const width = Math.hypot(right.x - left.x, right.y - left.y);
+    const height = -(chin.x - forehead.x) * sin + (chin.y - forehead.y) * cos;
+    if (width < 1 || height < 1) return null;
+    return {
+      yaw: ((nose.x - (left.x + right.x) / 2) * cos + (nose.y - (left.y + right.y) / 2) * sin) / width,
+      pitch: (-(nose.x - (forehead.x + chin.x) / 2) * sin + (nose.y - (forehead.y + chin.y) / 2) * cos) / height,
+      roll,
+    };
+  }
+
+  function combineGaze(head, eye, baseline) {
+    // Each ratio estimates a displacement in an unmirrored, image-right,
+    // image-down frame. atan converts the scaled displacement into degrees.
+    const headYaw = toDegrees(Math.atan((head.yaw - baseline.head.yaw) * 2));
+    const headPitch = toDegrees(Math.atan((head.pitch - baseline.head.pitch) * 2));
+    const eyeYaw = toDegrees(Math.atan((eye.dx - baseline.eye.x) * 2.5));
+    const eyePitch = toDegrees(Math.atan((eye.dy - baseline.eye.y) * 0.85));
+    // atan2 already supplied radians. Rotate both vectors into camera space.
+    const cos = Math.cos(head.roll);
+    const sin = Math.sin(head.roll);
+    const localYaw = headYaw + eyeYaw;
+    const localPitch = headPitch + eyePitch;
+    return {
+      headYaw, headPitch, eyeYaw, eyePitch,
+      totalYaw: localYaw * cos - localPitch * sin,
+      totalPitch: localYaw * sin + localPitch * cos,
+      score: Math.hypot(localYaw / YAW_LIMIT_DEG, localPitch / PITCH_LIMIT_DEG),
+    };
+  }
+
+  function showGazeDebug(head, gaze, state) {
+    if (!cameraPreviewDialog.open) return;
+    const round = value => value.toFixed(1);
+    const text = gaze
+      ? [
+          "head yaw/pitch/roll: " + [gaze.headYaw, gaze.headPitch, toDegrees(head.roll)].map(round).join(" / ") + "°",
+          "raw eye yaw/pitch: " + [gaze.eyeYaw, gaze.eyePitch].map(round).join(" / ") + "°",
+          "total yaw/pitch: " + [gaze.totalYaw, gaze.totalPitch].map(round).join(" / ") + "°",
+          "thresholds: " + YAW_LIMIT_DEG + "° yaw / " + PITCH_LIMIT_DEG + "° pitch",
+          "isLookingAway: " + state,
+        ].join("\n")
+      : state;
+    if (gazeDebug.textContent !== text) gazeDebug.textContent = text;
   }
 
   function drawEyeHud(eyes) {
@@ -459,37 +587,38 @@
   }
 
   function trackEyes(marks, timestamp) {
-    const eyes = EYES.map(eye => eyeGeometry(marks, eye)).filter(Boolean);
-    drawEyeHud(eyes);
-    if (eyes.length !== EYES.length) {
-      if (baselineOffset) applyGazeSample(false);
-      else {
-        resetGazeCalibration();
-        if (gazeLabel.textContent !== "Position your face in view") {
-          gazeLabel.textContent = "Position your face in view";
-        }
-      }
+    const eyes = EYES.map(eye => eyeGeometry(marks, eye));
+    drawEyeHud(eyes.filter(Boolean));
+    const head = headPose(marks);
+    if (!head || eyes.some(eye => !eye)) {
+      showGazeDebug(null, null, "Face or iris landmarks unavailable");
+      applyGazeSample(false);
       return;
     }
-    const offset = { x: (eyes[0].dx + eyes[1].dx) / 2, y: (eyes[0].dy + eyes[1].dy) / 2 };
     if (!baselineOffset) {
       calibrationStartedAt ??= timestamp;
-      calibrationSum.x += offset.x;
-      calibrationSum.y += offset.y;
-      calibrationSum.count += 1;
+      calibrationSum.head.yaw += head.yaw;
+      calibrationSum.head.pitch += head.pitch;
+      eyes.forEach((eye, index) => {
+        calibrationSum.eyes[index].x += eye.dx;
+        calibrationSum.eyes[index].y += eye.dy;
+      });
+      const count = ++calibrationSum.count;
       if (timestamp - calibrationStartedAt < 1000) {
-        if (gazeLabel.textContent !== "Calibrating · Look at the screen") {
-          gazeLabel.textContent = "Calibrating · Look at the screen";
-        }
+        showGazeDebug(null, null, "Calibrating · Look straight at the screen");
+        applyGazeSample(true);
         return;
       }
       baselineOffset = {
-        x: calibrationSum.x / calibrationSum.count,
-        y: calibrationSum.y / calibrationSum.count,
+        head: { yaw: calibrationSum.head.yaw / count, pitch: calibrationSum.head.pitch / count },
+        eyes: calibrationSum.eyes.map(eye => ({ x: eye.x / count, y: eye.y / count })),
       };
     }
-    applyGazeSample(Math.abs(offset.x - baselineOffset.x) <= GAZE_TOLERANCE &&
-      Math.abs(offset.y - baselineOffset.y) <= GAZE_TOLERANCE);
+    const estimates = eyes.map((eye, index) =>
+      combineGaze(head, eye, { head: baselineOffset.head, eye: baselineOffset.eyes[index] }));
+    const largest = estimates.reduce((a, b) => a.score >= b.score ? a : b);
+    applyGazeSample(largest.score <= 1);
+    showGazeDebug(head, largest, consecutiveAwayFrames >= AWAY_THRESHOLD_FRAMES);
   }
 
   async function detectFrame() {
@@ -499,13 +628,19 @@
       lastVideoTime = videoEl.currentTime;
       if (faceLandmarker) {
         const timestamp = performance.now();
-        const result = faceLandmarker.detectForVideo(videoEl, timestamp);
-        trackEyes(result.faceLandmarks?.[0], timestamp);
+        try {
+          const result = faceLandmarker.detectForVideo(videoEl, timestamp);
+          lastGazeFrameAt = Date.now();
+          trackEyes(result.faceLandmarks?.[0], timestamp);
+        } catch (error) {
+          console.error("Gaze inference failed", error);
+          setGaze(false);
+        }
       } else if (usingFallback && window.FaceDetector) {
         try {
           const detector = detectFrame.detector || (detectFrame.detector = new window.FaceDetector({ fastMode: true }));
           const faces = await detector.detect(videoEl);
-          if (cameraStream === stream) applyGazeSample(faces.length > 0);
+          if (cameraStream === stream && !focusSessionId) applyGazeSample(faces.length > 0);
         } catch {
           if (cameraStream === stream) gazeLabel.textContent = "Gaze tracking unavailable";
         }
@@ -519,13 +654,14 @@
   async function initLandmarker() {
     if (faceLandmarker || usingFallback) return;
     try {
-      const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm");
+      const vision = await import("./node_modules/@mediapipe/tasks-vision/vision_bundle.mjs");
       const fileset = await vision.FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+        new URL("./node_modules/@mediapipe/tasks-vision/wasm", document.baseURI).href
       );
       const options = {
         runningMode: "VIDEO",
         numFaces: 1,
+        outputFaceBlendshapes: true,
       };
       try {
         faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
@@ -552,18 +688,29 @@
   }
 
   async function startCamera(deviceId) {
+    const request = ++cameraRequest;
+    lastGazeFrameAt = Date.now();
     await initLandmarker();
+    if (request !== cameraRequest) return;
     const constraints = {
       video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
       audio: false,
     };
     try {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (request !== cameraRequest) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
       cameraStream = stream;
       videoEl.srcObject = stream;
       await videoEl.play();
+      if (request !== cameraRequest) return;
       videoEl.hidden = false;
+      inlineVideo.srcObject = stream;
+      inlineVideo.hidden = false;
+      inlinePlaceholder.hidden = true;
       previewPlaceholder.hidden = true;
       resetGazeCalibration();
       clearEyeHud();
@@ -573,6 +720,7 @@
       currentDeviceId = track.getSettings().deviceId || deviceId || "";
       await refreshCameraOptions();
     } catch (error) {
+      if (request !== cameraRequest) return;
       console.warn("Camera unavailable", error);
       if (gazeLabel) gazeLabel.textContent = "Camera unavailable";
     }
@@ -599,6 +747,7 @@
   async function onPresenceRequested() {
     if (cameraToggle && !cameraToggle.checked) {
       cameraToggle.checked = true;
+      document.getElementById("camera-toggle-label").textContent = "Disable Camera";
     }
     if (cameraStream) {
       resetGazeCalibration();
@@ -618,8 +767,17 @@
 
   if (cameraToggle) {
     cameraToggle.addEventListener("change", () => {
-      if (cameraToggle.checked) startCamera(currentDeviceId);
-      else stopCamera();
+      document.getElementById("camera-toggle-label").textContent = cameraToggle.checked ? "Disable Camera" : "Enable Camera";
+      if (cameraToggle.checked) {
+        startCamera(currentDeviceId);
+      } else {
+        stopCamera();
+        if (gazePaused) {
+          gazePaused = false;
+          document.getElementById("presence-pause-status").hidden = true;
+          startClock();
+        }
+      }
     });
   }
 

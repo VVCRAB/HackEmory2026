@@ -7,6 +7,10 @@
   let hideTimer;
   const dashboard = document.getElementById("analytics-dashboard");
   const gate = document.getElementById("analytics-gate");
+  const loadMessage = document.getElementById("analytics-load-message");
+  const retry = document.getElementById("analytics-retry");
+  retry.addEventListener("click", render);
+
   const appNames = new Map([
     ["com.instagram.android", "Instagram"],
     ["com.zhiliaoapp.musically", "TikTok"],
@@ -17,6 +21,8 @@
 
   function showPairingGate() {
     clearTimeout(hideTimer);
+    loadMessage.hidden = true;
+    retry.hidden = true;
     dashboard.inert = true;
     delete dashboard.dataset.ready;
     gate.hidden = false;
@@ -78,28 +84,39 @@
   async function render() {
     if (!api || !isConnected) return;
     const request = ++requestId;
+    loadMessage.textContent = "Loading analytics…";
+    loadMessage.hidden = dashboard.hasAttribute("data-ready");
+    retry.hidden = true;
+    try {
+      await renderDashboard(request);
+    } catch (error) {
+      if (request !== requestId || !isConnected) return;
+      console.error("Unable to render analytics", error);
+      loadMessage.textContent = "Unable to load analytics.";
+      loadMessage.hidden = false;
+      retry.hidden = false;
+    }
+  }
+
+  async function renderDashboard(request) {
     const from = rangeStart();
     const to = range === "last-week" ? from + 7 * DAY_MS : Date.now() + DAY_MS;
-    let stats;
-    try {
-      stats = await api.getAnalytics(from, to);
-    } catch (error) {
-      if (request === requestId) console.error("Unable to load analytics", error);
-      return;
-    }
+    const stats = await api.getAnalytics(from, to);
     if (request !== requestId || !isConnected) return;
-    if (!stats.connected) {
+    if (stats?.connected === false) {
+      document.body.dataset.phoneState = "disconnected";
       setConnectionState(false);
       return;
     }
-    const sessions = stats.sessions || [];
+    if (!stats?.connected) throw new Error("Missing analytics response");
+    const sessions = Array.isArray(stats.sessions) ? stats.sessions.filter(Boolean) : [];
     const slice = sessions.filter((item) => inRange(item.endedAt, from, to));
     const prevFrom = from - (to - from);
     const prevSlice = sessions.filter((item) => inRange(item.endedAt, prevFrom, from));
 
     const minutes = slice.reduce((sum, item) => sum + (Number(item.minutes) || 0), 0);
     const prevMinutes = prevSlice.reduce((sum, item) => sum + (Number(item.minutes) || 0), 0);
-    const lookAwayEvents = stats.lookAwayEvents || [];
+    const lookAwayEvents = Array.isArray(stats.lookAwayEvents) ? stats.lookAwayEvents : [];
     const lookAways = lookAwayEvents.length
       ? lookAwayEvents.filter((ts) => inRange(ts, from, to)).length
       : slice.reduce((sum, item) => sum + (Number(item.lookAways) || 0), 0);
@@ -118,7 +135,7 @@
     const attempts = Object.create(null);
     const windows = ["Morning", "Afternoon", "Evening", "Night"];
     const counts = [0, 0, 0, 0];
-    for (const log of stats.logs) {
+    for (const log of Array.isArray(stats.logs) ? stats.logs.filter(Boolean) : []) {
       if (log.event_type !== "BLOCKED") continue;
       const hour = new Date(log.timestamp).getHours();
       counts[hour < 6 || hour >= 21 ? 3 : hour < 12 ? 0 : hour < 17 ? 1 : 2]++;
@@ -206,6 +223,8 @@
       if (hoursEl) hoursEl.textContent = `${hours}h shielded`;
       if (bar) bar.style.width = `${Math.min(100, pct)}%`;
     });
+    loadMessage.hidden = true;
+    retry.hidden = true;
     dashboard.dataset.ready = "";
     dashboard.inert = false;
     gate.dataset.dismissed = "";
@@ -215,11 +234,5 @@
 
   window.addEventListener("focus:phone-status", event => setConnectionState(event.detail));
   showPairingGate();
-  if (api) {
-    const initialRequest = requestId;
-    api.getPairInfo().then(info => {
-      if (requestId === initialRequest) setConnectionState(Boolean(info.connected));
-    }).catch(error => console.error("Unable to check companion status", error));
-  }
-  api?.onAnalyticsUpdated(() => { if (isConnected) render(); });
+  api?.onAnalyticsUpdated?.(() => { if (isConnected) render(); });
 })();

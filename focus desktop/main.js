@@ -17,6 +17,8 @@ const appInventories = new Map();
 const inventoryFailures = new Set();
 let phoneLocked = false;
 let blockedApps = [];
+let blockMode = "SELECTED";
+let selectedPackages = [];
 let activityDb;
 
 function openActivityDatabase() {
@@ -134,13 +136,13 @@ function saveStats(stats) {
 }
 
 function getLanIp() {
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      const family = net.family === "IPv4" || net.family === 4;
-      if (family && !net.internal) return net.address;
-    }
-  }
+  //const nets = os.networkInterfaces();
+  //for (const name of Object.keys(nets)) {
+    //for (const net of nets[name] || []) {
+      //const family = net.family === "IPv4" || net.family === 4;
+      //if (family && !net.internal) return net.address;
+    //}
+  //}
   return "127.0.0.1";
 }
 
@@ -163,10 +165,21 @@ function installedApps() {
   return [...new Map([...appInventories.values()].flat().map(app => [app.packageName, app])).values()];
 }
 
+function companionState() {
+  return {
+    connected: sockets.size,
+    installedApps: installedApps(),
+    inventoryReady: appInventories.size > 0,
+    inventoryError: inventoryFailures.size > 0,
+    blockMode,
+    selectedPackages,
+  };
+}
+
 function publishCompanionStatus() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.webContents.isDestroyed()) {
-      win.webContents.send("companion-status", { connected: sockets.size, installedApps: installedApps(), inventoryReady: appInventories.size > 0, inventoryError: inventoryFailures.size > 0 });
+      win.webContents.send("companion-status", companionState());
     }
   }
 }
@@ -191,7 +204,7 @@ function startWebSocketServer() {
           console.info("[Phone WS] Companion paired", peer);
           dispatch({ action: "HELLO", ip: getLanIp(), port: WS_PORT }, [ws]);
           syncPhoneRules([ws]);
-          dispatch({ action: phoneLocked ? "LOCK" : "UNLOCK" }, [ws]);
+          dispatch(phoneLocked ? { type: "START_BLOCK", action: "LOCK", packages: blockedApps } : { type: "STOP_BLOCK", action: "UNLOCK" }, [ws]);
           publishCompanionStatus();
           return;
         }
@@ -292,9 +305,7 @@ ipcMain.handle("get-pair-info", () => ({
   ip: getLanIp(),
   port: WS_PORT,
   code: pairingCode,
-  connected: sockets.size,
-  installedApps: installedApps(),
-  inventoryReady: appInventories.size > 0, inventoryError: inventoryFailures.size > 0,
+  ...companionState(),
 }));
 
 ipcMain.handle("get-pair-qr", () => QRCode.toDataURL(
@@ -311,9 +322,13 @@ const androidPackages = new Map([
 ]);
 
 function updatePhoneRules(payload) {
-  blockedApps = payload?.mode === "FULL"
-    ? ["*"]
-    : Array.isArray(payload?.apps) ? payload.apps.filter(app => typeof app === "string").map(app => androidPackages.get(app.trim().toLowerCase()) ?? app.trim()) : [];
+  blockMode = payload?.mode === "FULL" ? "FULL" : "SELECTED";
+  const selection = payload?.selectedPackages ?? (blockMode === "SELECTED" ? payload?.apps : selectedPackages);
+  selectedPackages = Array.isArray(selection)
+    ? selection.filter(name => typeof name === "string")
+      .map(name => androidPackages.get(name.trim().toLowerCase()) ?? name.trim())
+    : [];
+  blockedApps = blockMode === "FULL" ? ["*"] : selectedPackages;
   syncPhoneRules();
 }
 
@@ -325,14 +340,14 @@ ipcMain.handle("phone-sync", (_event, payload) => {
 ipcMain.handle("phone-lock", (_event, payload) => {
   phoneLocked = true;
   updatePhoneRules(payload);
-  dispatch({ action: "LOCK" });
+  dispatch({ type: "START_BLOCK", action: "LOCK", packages: blockedApps });
   return { ok: true };
 });
 
 ipcMain.handle("phone-unlock", (_event, payload) => {
   phoneLocked = false;
   if (payload) updatePhoneRules(payload);
-  dispatch({ action: "UNLOCK" });
+  dispatch({ type: "STOP_BLOCK", action: "UNLOCK" });
   return { ok: true };
 });
 

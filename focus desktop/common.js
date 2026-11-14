@@ -45,8 +45,10 @@
   const feedback = document.getElementById("pair-feedback");
   let openRequest = 0;
   let connected = false;
+  let statusVersion = 0;
 
   async function openModal() {
+    if (connected) return;
     const request = ++openRequest;
 
     pairModal.classList.remove("hidden");
@@ -79,28 +81,33 @@
   }
 
   function applyCompanionStatus(info) {
+    if (!info || typeof info !== "object") throw new Error("Missing companion status");
     const status = document.getElementById("pair-status-label");
     const isConnected = Boolean(info.connected);
     if (status) status.textContent = isConnected ? "Connected" : "Pair Phone";
     if (isConnected && !connected) closeModal();
     connected = isConnected;
+    document.body.dataset.phoneState = connected ? "connected" : "disconnected";
     window.dispatchEvent(new CustomEvent("focus:phone-status", { detail: connected }));
-    window.dispatchEvent(new CustomEvent("focus:installed-apps", { detail: { apps: info.installedApps || [], ready: Boolean(info.inventoryReady), error: Boolean(info.inventoryError) } }));
+    window.dispatchEvent(new CustomEvent("focus:installed-apps", { detail: { apps: Array.isArray(info.installedApps) ? info.installedApps : [], ready: Boolean(info.inventoryReady), error: Boolean(info.inventoryError), blockMode: info.blockMode, selectedPackages: Array.isArray(info.selectedPackages) ? info.selectedPackages : [] } }));
   }
 
-  api?.onCompanionStatus(applyCompanionStatus);
+
 
   async function refreshPairInfo() {
-    if (!api) return;
     try {
+      const version = statusVersion;
       const info = await api.getPairInfo();
       const host = document.getElementById("pair-host");
       const code = document.getElementById("pair-code");
       if (host) host.textContent = `${info.ip}:${info.port}`;
       if (code) code.textContent = `Code: ${info.code}`;
-      applyCompanionStatus(info);
-    } catch {
-      /* preload missing outside Electron */
+      if (version === statusVersion) applyCompanionStatus(info);
+    } catch (error) {
+      console.error("Unable to read phone connection", error);
+      document.querySelectorAll(".phone-state-feedback").forEach(message => {
+        message.textContent = "Unable to check the phone connection. Reload this view to retry.";
+      });
     }
   }
 
@@ -118,6 +125,11 @@
     if (event.key === "Escape" && !pairModal.classList.contains("hidden")) closeModal();
   });
 
-  refreshPairInfo();
-
+  document.addEventListener("DOMContentLoaded", () => {
+    api?.onCompanionStatus?.(info => {
+      statusVersion++;
+      applyCompanionStatus(info);
+    });
+    refreshPairInfo();
+  }, { once: true });
 })();
