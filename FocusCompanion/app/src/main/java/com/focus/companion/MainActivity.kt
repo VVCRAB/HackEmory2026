@@ -24,6 +24,15 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
 
+        findViewById<Button>(R.id.testVibrationBtn).setOnClickListener {
+            val requested = playFocusVibration(this, "test button")
+            android.widget.Toast.makeText(
+                this,
+                if (requested) "Vibration requested" else "Vibration unavailable",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+
         accessibilityBtn?.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }

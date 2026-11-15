@@ -4,6 +4,8 @@ const fs = require("fs");
 const os = require("os");
 const { randomInt } = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
+const { createFocusInbox } = require("./focus-inbox");
+const { createQuote, verifyPayment } = require("./cancel-payment");
 const QRCode = require("qrcode");
 const { WebSocket, WebSocketServer } = require("ws");
 
@@ -13,6 +15,13 @@ const statsPath = path.join(__dirname, "stats.json");
 let pairingCode = randomCode();
 let wss = null;
 const sockets = new Set();
+const focusInbox = createFocusInbox(inbox => {
+  if (!hasConnectedCompanion()) return;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("focus-messages-updated", inbox);
+  }
+});
+ipcMain.handle("focus-messages-get", () => hasConnectedCompanion() ? focusInbox.snapshot() : { emergency: [], summaries: [] });
 const appInventories = new Map();
 const inventoryFailures = new Set();
 let phoneLocked = false;
@@ -208,6 +217,10 @@ function startWebSocketServer() {
           publishCompanionStatus();
           return;
         }
+        if (msg.action === "FOCUS_MESSAGE") {
+          focusInbox.receive(msg).catch(() => console.warn("[Messages] Unable to generate a summary"));
+          return;
+        }
         if (msg.action === "INSTALLED_APPS_ERROR") {
           inventoryFailures.add(ws);
           publishCompanionStatus();
@@ -240,7 +253,10 @@ function startWebSocketServer() {
       clearTimeout(pairingTimeout);
       appInventories.delete(ws);
       inventoryFailures.delete(ws);
-      if (sockets.delete(ws)) publishCompanionStatus();
+      if (sockets.delete(ws)) {
+        if (!hasConnectedCompanion()) releaseMessagingPause(Date.now());
+        publishCompanionStatus();
+      }
       console.info("[Phone WS] Client disconnected", peer, code, `(${sockets.size} active)`);
     });
     ws.on("error", error => console.error("[Phone WS] Client error", peer, error.message));
@@ -366,19 +382,139 @@ ipcMain.handle("get-analytics", (_event, from, to) => {
 
 ipcMain.handle("stats-get", () => ({ sessions: readFocusSessions() }));
 
-ipcMain.handle("stats-focus-tick", (_event, sessionId) => {
-  if (typeof sessionId !== "string" || !/^[0-9a-f-]{36}$/i.test(sessionId)) return;
-  const now = new Date();
-  const day = new Date(now);
+const timer = {
+  plannedSeconds: 3000, remainingSeconds: 3000, preset: 50,
+  sessionId: null, endTime: null, gazePaused: false, messagingPaused: false, paymentPaused: false,
+};
+let timerInterval;
+let loggedRemaining;
+
+function publishTimer() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("timer-state", timer);
+  }
+}
+
+function advanceTimer(now = Date.now()) {
+  if (timer.endTime === null) return;
+  const remaining = Math.min(timer.remainingSeconds, Math.max(0, Math.ceil((timer.endTime - now) / 1000)));
+  if (remaining === timer.remainingSeconds) return;
+  const seconds = loggedRemaining - remaining;
+  const day = new Date(Math.min(now, timer.endTime));
+  const timestamp = day.getTime();
   day.setHours(0, 0, 0, 0);
   activityDb.prepare(`
-    INSERT INTO focus_sessions (id, seconds, timestamp) VALUES (?, 1, ?)
-    ON CONFLICT(id) DO UPDATE SET seconds = seconds + 1, timestamp = excluded.timestamp
-  `).run(sessionId + ":" + day.getTime(), now.getTime());
+    INSERT INTO focus_sessions (id, seconds, timestamp) VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET seconds = seconds + excluded.seconds, timestamp = excluded.timestamp
+  `).run(timer.sessionId + ":" + day.getTime(), seconds, timestamp);
+  loggedRemaining = remaining;
+  timer.remainingSeconds = remaining;
+  if (!remaining) {
+    clearInterval(timerInterval);
+    timer.endTime = null;
+    timer.sessionId = null;
+  }
   publishAnalyticsUpdate();
+  publishTimer();
+}
+
+function runTimer(now, duration = timer.remainingSeconds * 1000) {
+  timer.endTime = now + duration;
+  loggedRemaining = timer.remainingSeconds;
+  timer.gazePaused = false;
+  clearInterval(timerInterval);
+  timerInterval = setInterval(advanceTimer, 200);
+}
+
+ipcMain.handle("timer-get", () => {
+  advanceTimer();
+  return timer;
+});
+
+let pausedDuration = 0;
+function releaseMessagingPause(now) {
+  if (!timer.messagingPaused) return;
+  timer.messagingPaused = false;
+  if (!timer.gazePaused && !timer.paymentPaused) runTimer(now, pausedDuration);
+  publishTimer();
+}
+ipcMain.handle("timer-command", (_event, command, value, sessionId) => {
+  const now = Date.now();
+  advanceTimer(now);
+  if (command === "start" && !timer.sessionId && timer.plannedSeconds > 0) {
+    timer.remainingSeconds = timer.plannedSeconds;
+    timer.sessionId = require("node:crypto").randomUUID();
+    runTimer(now);
+  } else if (command === "pause-gaze" && timer.sessionId === sessionId && timer.endTime !== null) {
+    pausedDuration = timer.endTime - now;
+    timer.gazePaused = true;
+    timer.endTime = null;
+    clearInterval(timerInterval);
+    logActivity("LOOK_AWAY");
+  } else if (command === "open-payment" && timer.sessionId && timer.sessionId === sessionId && !timer.paymentPaused) {
+    timer.paymentPaused = true;
+    if (timer.endTime !== null) {
+      pausedDuration = timer.endTime - now;
+      timer.endTime = null;
+      clearInterval(timerInterval);
+    }
+  } else if (command === "close-payment" && timer.sessionId === sessionId && timer.paymentPaused) {
+    timer.paymentPaused = false;
+    if (!timer.messagingPaused && !timer.gazePaused) runTimer(now, pausedDuration);
+  } else if (command === "open-messages" && hasConnectedCompanion() && timer.sessionId && timer.sessionId === sessionId && !timer.messagingPaused) {
+    timer.messagingPaused = true;
+    if (timer.endTime !== null) {
+      pausedDuration = timer.endTime - now;
+      timer.endTime = null;
+      clearInterval(timerInterval);
+    }
+  } else if (command === "close-messages" && timer.sessionId === sessionId && timer.messagingPaused) {
+    releaseMessagingPause(now);
+  } else if (command === "resume" && timer.sessionId === sessionId && timer.gazePaused) {
+    timer.gazePaused = false;
+    if (!timer.messagingPaused && !timer.paymentPaused) runTimer(now, pausedDuration);
+  } else if (!timer.sessionId && command === "duration" && Number.isInteger(value)) {
+    timer.plannedSeconds = timer.remainingSeconds = Math.max(0, Math.min(86399, value));
+  } else if (!timer.sessionId && command === "preset" && [25, 50, 90].includes(value)) {
+    timer.preset = value;
+    timer.plannedSeconds = timer.remainingSeconds = value * 60;
+  } else if (command === "reset" && !timer.sessionId) {
+    clearInterval(timerInterval);
+    timer.endTime = null;
+    timer.sessionId = null;
+    timer.gazePaused = false;
+    timer.messagingPaused = false;
+    timer.remainingSeconds = timer.plannedSeconds;
+  }
+  publishTimer();
+  return timer;
+});
+
+ipcMain.handle("focus-vibrate", (_event, id) => {
+  if (id && timer.sessionId === id && hasConnectedCompanion()) dispatch({ action: "VIBRATE" });
 });
 
 ipcMain.handle("stats-add-lookaway", () => logActivity("LOOK_AWAY"));
 ipcMain.handle("stats-add-blocked", (_event, appName) => {
   if (typeof appName === "string" && appName.length > 0 && appName.length <= 255) logActivity("BLOCKED", appName);
+});
+
+ipcMain.handle("cancel-payment-quote", (_event, id) => {
+  if (!id || id !== timer.sessionId) throw new Error("No active session");
+  return createQuote(id, timer.plannedSeconds).catch(() => { throw new Error("Unable to fetch the SOL quote."); });
+});
+
+ipcMain.handle("cancel-payment-verify", async (_event, id, wallet, signature) => {
+  if (!id || id !== timer.sessionId) return false;
+  const verified = await verifyPayment(id, wallet, signature).catch(() => false);
+  advanceTimer();
+  if (!verified || timer.sessionId !== id) return false;
+  clearInterval(timerInterval);
+  timer.sessionId = timer.endTime = null;
+  timer.paymentPaused = timer.messagingPaused = timer.gazePaused = false;
+  timer.remainingSeconds = timer.plannedSeconds;
+  phoneLocked = false;
+  publishTimer();
+  dispatch({ type: "STOP_BLOCK", action: "UNLOCK" });
+  return true;
 });

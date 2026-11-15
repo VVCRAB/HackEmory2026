@@ -143,11 +143,27 @@ class AppBlockerService : AccessibilityService() {
                 }
                 "LOCK" -> isLocked = true
                 "UNLOCK" -> isLocked = false
+                "VIBRATE" -> vibrateForLookAway()
                 else -> Log.w("FocusWS", "Unknown action: $action")
             }
         } catch (error: org.json.JSONException) {
             Log.w("FocusWS", "Invalid desktop message", error)
         }
+    }
+
+    private fun vibrateForLookAway() {
+        Log.d("FocusVibration", "Received VIBRATE from paired desktop")
+        playFocusVibration(this, "desktop look-away")
+        runCatching {
+            val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
+            try {
+                for (pulse in 0 until 10) {
+                    handler.postDelayed({ tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 180) }, pulse * 500L)
+                }
+            } finally {
+                handler.postDelayed({ tone.release() }, 5150)
+            }
+        }.onFailure { Log.w("FocusWS", "Could not play look-away tone", it) }
     }
 
     private fun sendInstalledApps() {

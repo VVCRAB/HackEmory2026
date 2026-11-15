@@ -1,13 +1,72 @@
 (function () {
+  const analyticsMethods = new Set(["getAnalytics", "getPairInfo", "getPairQr"]);
+  if (window !== window.top && !window.focusAPI) {
+    const pending = new Map();
+    const listeners = new Map();
+    let nextId = 0;
+    window.addEventListener("message", ({ source, data }) => {
+      if (source !== window.parent || !data) return;
+      if (data.event) listeners.get(data.event)?.(data.value);
+      const request = pending.get(data.reply);
+      if (!request) return;
+      pending.delete(data.reply);
+      if (data.error) request.reject(new Error(data.error));
+      else request.resolve(data.value);
+    });
+    window.focusAPI = Object.fromEntries([...analyticsMethods].map(method => [method, (...args) =>
+      new Promise((resolve, reject) => {
+        const id = ++nextId;
+        pending.set(id, { resolve, reject });
+        window.parent.postMessage({ method, args, id }, "*");
+      })]));
+    window.focusAPI.onCompanionStatus = callback => listeners.set("companion", callback);
+    window.focusAPI.onAnalyticsUpdated = callback => listeners.set("analytics", callback);
+  }
   const api = window.focusAPI;
 
-  document.querySelectorAll("[data-path]").forEach((link) => {
-    link.addEventListener("click", (event) => {
+  let analyticsFrame;
+  function showAnalytics() {
+    if (!analyticsFrame) {
+      analyticsFrame = document.createElement("iframe");
+      analyticsFrame.title = "Analytics";
+      analyticsFrame.src = "analytics.html";
+      analyticsFrame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:100;background:#121214";
+      document.body.append(analyticsFrame);
+      api?.onCompanionStatus(info => analyticsFrame.contentWindow.postMessage({ event: "companion", value: info }, "*"));
+      api?.onAnalyticsUpdated(() => analyticsFrame.contentWindow.postMessage({ event: "analytics" }, "*"));
+      window.addEventListener("message", async event => {
+        if (event.source !== analyticsFrame.contentWindow) return;
+        const request = event.data;
+        if (request !== "focus:show-study") {
+          if (!analyticsMethods.has(request?.method) || !Array.isArray(request.args) ||
+              !Number.isSafeInteger(request.id)) return;
+          const response = { reply: request.id };
+          try {
+            response.value = await api[request.method](...request.args);
+          } catch (error) {
+            response.error = error.message;
+          }
+          event.source.postMessage(response, "*");
+          return;
+        }
+        analyticsFrame.hidden = true;
+        analyticsFrame.style.display = "none";
+        document.querySelector('[data-path="analytics"]').focus();
+      });
+    }
+    analyticsFrame.hidden = false;
+    analyticsFrame.style.display = "block";
+    analyticsFrame.focus();
+  }
+
+  document.querySelectorAll("[data-path]").forEach(link => {
+    link.addEventListener("click", event => {
       event.preventDefault();
-      const path = link.getAttribute("data-path");
-      if (path === "analytics") {
-        window.location.href = "analytics.html";
-      } else {
+      if (link.dataset.path === "analytics") {
+        if (window === window.top && !location.pathname.endsWith("/analytics.html")) showAnalytics();
+      } else if (window !== window.top) {
+        window.parent.postMessage("focus:show-study", "*");
+      } else if (location.pathname.endsWith("/analytics.html")) {
         window.location.href = "index.html";
       }
     });
