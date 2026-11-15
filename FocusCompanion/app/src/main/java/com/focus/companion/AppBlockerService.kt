@@ -27,6 +27,12 @@ import java.util.concurrent.TimeUnit
 
 class AppBlockerService : AccessibilityService() {
     companion object {
+        internal var focusSessionId: String? = null
+            private set
+        private var messageSocket: WebSocket? = null
+        internal fun forwardFocusMessage(message: JSONObject): Boolean =
+            messageSocket?.send(message.put("action", "FOCUS_MESSAGE").put("sessionId", focusSessionId).toString()) == true
+
         private var isLocked = false
         private var blockedPackages = emptySet<String>()
 
@@ -37,7 +43,7 @@ class AppBlockerService : AccessibilityService() {
             "com.google.android.apps.dialer", "com.android.emergency"
         )
 
-        private fun isEmergencyPackage(context: Context, target: String): Boolean {
+        internal fun isEmergencyPackage(context: Context, target: String): Boolean {
             val name = target.lowercase()
             return target == context.packageName || name in emergencyPackages ||
                 "dialer" in name || "telecom" in name ||
@@ -76,6 +82,8 @@ class AppBlockerService : AccessibilityService() {
 
     private fun connect() {
         handler.removeCallbacks(reconnect)
+        focusSessionId = null
+        messageSocket = null
         socket?.cancel()
         socket = null
         isLocked = false
@@ -120,6 +128,8 @@ class AppBlockerService : AccessibilityService() {
         handler.post {
             if (socket !== webSocket) return@post
             socket = null
+            focusSessionId = null
+            messageSocket = null
             isLocked = false
             Log.d("FocusWS", if (retry) "Desktop disconnected, retrying" else "Pairing rejected, scan the current QR code")
             if (retry) handler.postDelayed(reconnect, 2000)
@@ -130,11 +140,18 @@ class AppBlockerService : AccessibilityService() {
         try {
             val message = JSONObject(text)
             val action = message.optString("action")
-            Log.d("FocusWS", if (action == "HELLO") "HELLO received" else text)
+            Log.d("FocusWS", "Received $action")
             when (action) {
                 "HELLO" -> {
+                    messageSocket = socket
                     prefs.edit().putString(PAIRING_ACK, revision).apply()
                     sendInstalledApps()
+                }
+                "FOCUS_SESSION" -> focusSessionId = (message.opt("id") as? String)?.takeIf { it.isNotBlank() }
+                "FOCUS_REPLY" -> {
+                    val requestId = message.getString("requestId")
+                    val ok = AppNotificationListener.replyFromDesktop(this, message.getString("token"), message.getString("text"))
+                    socket?.send(JSONObject().put("action", "FOCUS_REPLY_RESULT").put("requestId", requestId).put("ok", ok).toString())
                 }
                 "GET_INSTALLED_APPS" -> sendInstalledApps()
                 "SYNC" -> {
@@ -155,15 +172,22 @@ class AppBlockerService : AccessibilityService() {
         Log.d("FocusVibration", "Received VIBRATE from paired desktop")
         playFocusVibration(this, "desktop look-away")
         runCatching {
-            val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_ALARM, 100)
+            val attributes = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            val player = android.media.MediaPlayer.create(this, R.raw.ironwill_quack, attributes, 0)
+                ?: error("Quack audio unavailable")
+            player.setOnCompletionListener { it.release() }
+            player.setOnErrorListener { media, _, _ -> media.release(); true }
             try {
-                for (pulse in 0 until 10) {
-                    handler.postDelayed({ tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 180) }, pulse * 500L)
-                }
-            } finally {
-                handler.postDelayed({ tone.release() }, 5150)
+                player.start()
+                Log.d("FocusVibration", "Started look-away quack")
+            } catch (error: RuntimeException) {
+                player.release()
+                throw error
             }
-        }.onFailure { Log.w("FocusWS", "Could not play look-away tone", it) }
+        }.onFailure { Log.w("FocusVibration", "Could not play look-away quack", it) }
     }
 
     private fun sendInstalledApps() {

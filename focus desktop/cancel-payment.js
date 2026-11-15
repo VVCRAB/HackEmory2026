@@ -12,17 +12,21 @@ function rpcUrl() {
   return process.env.SOLANA_RPC_URL;
 }
 
+function sessionFeeCents(seconds) {
+  return Math.max(1, Math.round(seconds / 60 * FEE_FACTOR * USD_RATE * 100));
+}
+
 async function createQuote(sessionId, seconds) {
   rpcUrl();
   const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error("Price unavailable");
   const price = (await response.json()).solana?.usd;
   if (!Number.isFinite(price) || price <= 0) throw new Error("Price unavailable");
-  const usd = Math.max(.01, Math.round(seconds / 60 * FEE_FACTOR * USD_RATE * 100) / 100);
+  const usd = sessionFeeCents(seconds) / 100;
   const lamports = Math.ceil(usd / price * LAMPORTS);
   const reference = randomBytes(24).toString("hex");
   const sol = (lamports / LAMPORTS).toFixed(9);
-  quote = { sessionId, lamports, reference };
+  quote = { sessionId, lamports, reference, stakeCents: Math.round(usd * 100) };
   return { usd: usd.toFixed(2), sol, recipient: RECIPIENT, reference };
 }
 
@@ -49,7 +53,7 @@ async function verifyPayment(sessionId, wallet, signature) {
   const memo = instructions.some(i => i.program === "spl-memo" && i.parsed === expected.reference);
   if (!transfer || !memo || quote !== expected) return false;
   quote = undefined;
-  return true;
+  return { stakeCents: expected.stakeCents };
 }
 
-module.exports = { createQuote, verifyPayment };
+module.exports = { createQuote, verifyPayment, sessionFeeCents };

@@ -7,6 +7,8 @@
   let timerReady = false;
   let gazePaused = false;
   const AWAY_GRACE_MS = 6000;
+  const GAZE_QUACK_MS = 2000;
+  let gazeQuacked = false;
   const AWAY_VIBRATION_MS = 11000;
   let awayReminderSent = false;
   let focusSessionId;
@@ -106,7 +108,8 @@
   }
 
   function renderTimer(state) {
-    const wasActive = Boolean(focusSessionId);
+    const previousSession = focusSessionId;
+    const wasActive = Boolean(previousSession);
     totalSeconds = state.remainingSeconds;
     plannedSeconds = state.plannedSeconds;
     lastPreset = state.preset;
@@ -114,6 +117,7 @@
     isRunning = state.endTime !== null;
     gazePaused = state.gazePaused;
     timerReady = true;
+    renderFocusProgress(state.progress, previousSession);
     document.body.toggleAttribute("data-focus-active", Boolean(focusSessionId));
     document.getElementById("active-focus").hidden = !focusSessionId;
     if (wasActive !== Boolean(focusSessionId)) {
@@ -192,6 +196,56 @@
     requestAnimationFrame(frame);
   }
 
+  function renderFocusProgress(progress, previousSession) {
+    if (!progress) return;
+    const streak = progress.streak + "-session streak";
+    const cardStreak = document.body.dataset.phoneState === "connected" ? 0 : progress.streak;
+    document.getElementById("today-streak").textContent = String(cardStreak);
+    document.getElementById("today-streak-unit").textContent = cardStreak === 1 ? "session" : "sessions";
+    const stake = "$" + (progress.weekStakeCents / 100).toFixed(2);
+    document.getElementById("focus-week-stake").textContent = "Staked in the last 7 days: " + stake + " USD";
+    const events = document.getElementById("focus-events");
+    const signature = JSON.stringify(progress.events);
+    if (events.dataset.signature !== signature) {
+      events.dataset.signature = signature;
+      events.replaceChildren(...(progress.events.length ? progress.events : [{ label: "No events yet." }]).map(event => {
+        const row = document.createElement("li");
+        row.textContent = event.timestamp
+          ? new Date(event.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · " + event.label
+          : event.label;
+        return row;
+      }));
+    }
+    window.dispatchEvent(new CustomEvent("focus-breadcrumbs", { detail: progress.earnedBreadcrumbCents }));
+    const result = progress.latest;
+    if (!result || result.id !== previousSession || focusSessionId) return;
+    const dialog = document.getElementById("focus-result");
+    document.getElementById("focus-result-title").textContent = result.completed ? "Session cleared" : "Early exit · streak reset";
+    document.getElementById("focus-result-score").textContent = result.score;
+    const reward = document.getElementById("focus-result-reward");
+    reward.hidden = !result.rewardCents;
+    reward.textContent = result.rewardCents ? "+" + (result.rewardCents / 100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " breadcrumbs earned" : "";
+    const metrics = document.getElementById("focus-result-metrics");
+    const seconds = result.focusedSeconds;
+    const entries = [
+      ["Time focused", Math.floor(seconds / 60) + "m " + seconds % 60 + "s"],
+      ["Times looked away", result.lookAways],
+      ["Tabs blocked", result.tabsClosed],
+      ["Messages handled", result.messagesHandled],
+      ["Current streak", streak],
+      ["Staked this session", "$" + (result.stakeCents / 100).toFixed(2) + " USD"],
+    ];
+    metrics.replaceChildren(...entries.flatMap(([label, value]) => {
+      const term = document.createElement("dt");
+      const detail = document.createElement("dd");
+      term.textContent = label;
+      detail.textContent = value;
+      return [term, detail];
+    }));
+    if (cancelDialog.open) cancelDialog.close();
+    if (!dialog.open) dialog.showModal();
+  }
+
   function timerCommand(command, value) {
     return api?.commandTimer(command, value, focusSessionId).catch(error => console.error("Timer update failed", error));
   }
@@ -240,6 +294,7 @@
   });
 
   window.addEventListener("keydown", (event) => {
+    if (document.body.hasAttribute("data-duck-shop")) return;
     if (event.code === "Space" && event.target.tagName !== "INPUT" && event.target.tagName !== "SELECT" && event.target.tagName !== "TEXTAREA") {
       event.preventDefault();
       toggleTimer();
@@ -436,9 +491,19 @@
 
   function setGaze(looking) {
     if (looking || (!isRunning && !gazePaused)) awayStartedAt = null;
-    else awayStartedAt ??= Date.now();
+    else if (awayStartedAt === null) {
+      awayStartedAt = Date.now();
+      if (focusSessionId && isRunning) timerCommand("look-away");
+    }
     const elapsed = awayStartedAt === null ? 0 : Date.now() - awayStartedAt;
-    if (awayStartedAt === null) awayReminderSent = false;
+    if (awayStartedAt === null) {
+      awayReminderSent = false;
+      gazeQuacked = false;
+    }
+    if (focusSessionId && isRunning && !looking && elapsed >= GAZE_QUACK_MS && !gazeQuacked) {
+      gazeQuacked = true;
+      window.dispatchEvent(new CustomEvent("ironwill-gaze"));
+    }
     if (focusSessionId && !looking && elapsed >= AWAY_VIBRATION_MS && !awayReminderSent) {
       awayReminderSent = true;
       api?.vibrateForLookAway(focusSessionId).catch(error => console.error("Phone reminder failed", error));
@@ -823,9 +888,9 @@
   async function refreshTodayStats() {
     const shieldedEl = document.getElementById("today-shielded");
     const focusEl = document.getElementById("today-focus");
-    const streakEl = document.getElementById("today-streak");
     const connected = document.body.dataset.phoneState === "connected";
-    const blockedCount = lockMode === "FULL" ? appList.children.length : selectedApps().length;
+    // The paired hackathon dashboard shows a zeroed summary without changing saved stats.
+    const blockedCount = 0;
     shieldedEl.textContent = connected ? String(blockedCount) : "--";
     shieldedEl.classList.toggle("text-neutral-400", !connected);
     shieldedEl.classList.toggle("text-white", connected);
@@ -839,25 +904,10 @@
       const todayMinutes = (stats.sessions || [])
         .filter((item) => startOfDay(item.endedAt) === today)
         .reduce((sum, item) => sum + (Number(item.minutes) || 0), 0);
-      if (focusEl) focusEl.textContent = (todayMinutes / 60).toFixed(1);
-      const streak = computeStreak(stats.sessions || []);
-      streakEl.textContent = String(streak);
-      document.getElementById("today-streak-unit").textContent = streak === 1 ? "day" : "days";
+      if (focusEl) focusEl.textContent = document.body.dataset.phoneState === "connected" ? "0.0" : (todayMinutes / 60).toFixed(1);
     } catch {
       /* ignore */
     }
-  }
-
-  function computeStreak(sessions) {
-    const days = new Set(sessions.map((item) => startOfDay(item.endedAt)));
-    let streak = 0;
-    let cursor = startOfDay(Date.now());
-    if (!days.has(cursor)) cursor -= 86400000;
-    while (days.has(cursor)) {
-      streak += 1;
-      cursor -= 86400000;
-    }
-    return streak;
   }
 
   const blockerToggle = document.getElementById("active-blocker-toggle");
@@ -893,6 +943,7 @@
   document.getElementById("end-focus-session").addEventListener("click", async () => {
     const id = focusSessionId;
     if (cancelDialog.open) return;
+    document.getElementById("ironwill-payment-quip").textContent = "IronWill: My disappointment is immeasurable, and your wallet is about to be lighter.";
     cancelDialog.showModal();
     await timerCommand("open-payment");
     if (!cancelDialog.open || id !== focusSessionId) return;
@@ -908,6 +959,7 @@
     try {
       paymentQuote = await api.cancelPaymentQuote(id);
       const { usd, sol } = paymentQuote;
+      document.getElementById("ironwill-payment-quip").textContent = "IronWill: Quitting already? That’ll be $" + usd + " in bread crumbs.";
       cancelFee.textContent = "Because you are ending your focus session early, a mandatory early exit penalty fee of $" + usd + " USD (" + sol + " SOL) will be donated directly to an attention span research organization (LogOut.org) to support their work.";
       document.getElementById("cancel-usd").textContent = "$" + usd + " USD";
       document.getElementById("cancel-total").textContent = "$" + usd + " USD / " + sol + " SOL";
@@ -995,6 +1047,11 @@
   }
 
   function handlePhoneConnected(connected) {
+    if (connected) {
+      document.getElementById("today-focus").textContent = "0.0";
+      document.getElementById("today-streak").textContent = "0";
+      document.getElementById("today-streak-unit").textContent = "sessions";
+    }
     renderActiveBlocker();
     document.getElementById("phone-prompt").hidden = connected;
     document.getElementById("phone-modes").hidden = !connected;

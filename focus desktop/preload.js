@@ -1,8 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("focusAPI", {
+  replyToFocusMessage: (token, text) => ipcRenderer.invoke("focus-message-reply", token, text),
+  onIronWillCue: callback => { ipcRenderer.on("ironwill-cue", (_event, cue) => callback(cue)); },
+  getSiteCaptures: () => ipcRenderer.invoke("site-capture-list"),
   getFocusMessages: () => ipcRenderer.invoke("focus-messages-get"),
-  onFocusMessagesUpdated: callback => { ipcRenderer.on("focus-messages-updated", (_event, inbox) => callback(inbox)); },
+  onFocusMessagesUpdated: callback => { ipcRenderer.on("focus-messages-updated", (_event, inbox, emergencyPing) => callback(inbox, emergencyPing)); },
   getPairQr: () => ipcRenderer.invoke("get-pair-qr"),
   onCompanionStatus: (callback) => {
     ipcRenderer.on("companion-status", (_event, status) => callback(status));

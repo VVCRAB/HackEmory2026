@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, session } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Notification, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -15,11 +15,40 @@ const statsPath = path.join(__dirname, "stats.json");
 let pairingCode = randomCode();
 let wss = null;
 const sockets = new Set();
-const focusInbox = createFocusInbox(inbox => {
-  if (!hasConnectedCompanion()) return;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.webContents.isDestroyed()) win.webContents.send("focus-messages-updated", inbox);
+const environmentFile = path.join(__dirname, ".env");
+if (fs.existsSync(environmentFile)) process.loadEnvFile(environmentFile);
+const focusInbox = createFocusInbox((inbox, emergency, handledSessionId) => {
+  if (handledSessionId === timer.sessionId) {
+    focusProgress.record(handledSessionId, "messagesHandled", emergency ? "Emergency message received" : "Message summarized");
+    if (emergency) publishIronWillCue("emergency");
+    publishTimer();
   }
+  if (!hasConnectedCompanion()) return;
+  if (emergency && emergency.sessionId === timer.sessionId && Notification.isSupported()) {
+    new Notification({
+      title: "🦆 IronWill · Emergency · " + (emergency.sender || emergency.sourceApp),
+      body: "Via " + emergency.sourceApp + " · " + emergency.text.replace(/\s+/g, " ").slice(0, 160),
+      silent: true,
+    }).show();
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("focus-messages-updated", inbox, Boolean(emergency && emergency.sessionId === timer.sessionId));
+  }
+});
+const replyRoutes = new Map();
+const pendingReplies = new Map();
+ipcMain.handle("focus-message-reply", (_event, token, text) => {
+  const route = replyRoutes.get(token);
+  if (!focusInbox.snapshot().emergency.some(entry => entry.replyToken === token)) return false;
+  if (!route || !timer.sessionId || route.sessionId !== timer.sessionId ||
+      !timer.messagingPaused || !sockets.has(route.ws) || route.ws.readyState !== WebSocket.OPEN ||
+      typeof text !== "string" || !text.trim() || text.length > 500) return false;
+  const requestId = require("node:crypto").randomUUID();
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => { pendingReplies.delete(requestId); resolve(null); }, 5000);
+    pendingReplies.set(requestId, { ws: route.ws, resolve, timeout });
+    route.ws.send(JSON.stringify({ action: "FOCUS_REPLY", requestId, token, text: text.trim() }));
+  });
 });
 ipcMain.handle("focus-messages-get", () => hasConnectedCompanion() ? focusInbox.snapshot() : { emergency: [], summaries: [] });
 const appInventories = new Map();
@@ -29,6 +58,7 @@ let blockedApps = [];
 let blockMode = "SELECTED";
 let selectedPackages = [];
 let activityDb;
+const focusProgress = require("./focus-progress").createFocusProgress(() => activityDb);
 
 function openActivityDatabase() {
   activityDb = new DatabaseSync(path.join(app.getPath("userData"), "activity.sqlite"));
@@ -48,6 +78,7 @@ function openActivityDatabase() {
     CREATE INDEX IF NOT EXISTS activity_logs_timestamp ON activity_logs(timestamp);
   `);
   initializeAnalyticsHistory();
+  focusProgress.initialize();
 }
 
 function initializeAnalyticsHistory() {
@@ -214,11 +245,26 @@ function startWebSocketServer() {
           dispatch({ action: "HELLO", ip: getLanIp(), port: WS_PORT }, [ws]);
           syncPhoneRules([ws]);
           dispatch(phoneLocked ? { type: "START_BLOCK", action: "LOCK", packages: blockedApps } : { type: "STOP_BLOCK", action: "UNLOCK" }, [ws]);
+          dispatch({ action: "FOCUS_SESSION", id: timer.sessionId }, [ws]);
           publishCompanionStatus();
           return;
         }
+        if (msg.action === "FOCUS_REPLY_RESULT") {
+          const pending = pendingReplies.get(msg.requestId);
+          if (pending?.ws === ws) {
+            pendingReplies.delete(msg.requestId);
+            clearTimeout(pending.timeout);
+            pending.resolve(msg.ok === true);
+          }
+          return;
+        }
         if (msg.action === "FOCUS_MESSAGE") {
-          focusInbox.receive(msg).catch(() => console.warn("[Messages] Unable to generate a summary"));
+          if (!timer.sessionId || msg.sessionId !== timer.sessionId) return;
+          if (typeof msg.replyToken === "string" && /^[0-9a-f-]{36}$/i.test(msg.replyToken)) {
+            replyRoutes.set(msg.replyToken, { ws, sessionId: msg.sessionId });
+            if (replyRoutes.size > 100) replyRoutes.delete(replyRoutes.keys().next().value);
+          } else delete msg.replyToken;
+          focusInbox.receive(msg, () => publishIronWillCue("normal")).catch(() => console.warn("[Messages] Unable to generate a summary"));
           return;
         }
         if (msg.action === "INSTALLED_APPS_ERROR") {
@@ -272,6 +318,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: "#121214",
     webPreferences: {
+      autoplayPolicy: "no-user-gesture-required",
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
@@ -367,6 +414,7 @@ ipcMain.handle("phone-unlock", (_event, payload) => {
   return { ok: true };
 });
 
+
 ipcMain.handle("get-analytics", (_event, from, to) => {
   if (!hasConnectedCompanion()) return { connected: false };
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from >= to) {
@@ -376,7 +424,7 @@ ipcMain.handle("get-analytics", (_event, from, to) => {
     SELECT id, event_type, package_name, timestamp
     FROM activity_logs WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp DESC
   `).all(from, to);
-  return { connected: true, logs, sessions: readFocusSessions(),
+  return { connected: true, streak: focusProgress.snapshot().streak, logs, sessions: readFocusSessions(),
     lookAwayEvents: logs.filter(log => log.event_type === "LOOK_AWAY").map(log => log.timestamp) };
 });
 
@@ -389,9 +437,48 @@ const timer = {
 let timerInterval;
 let loggedRemaining;
 
-function publishTimer() {
+let lastPublishedSession;
+function publishIronWillCue(kind, source) {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.webContents.isDestroyed()) win.webContents.send("timer-state", timer);
+    if (!win.webContents.isDestroyed()) win.webContents.send("ironwill-cue", { kind, source });
+  }
+}
+
+const siteCapture = require("./site-capture").createSiteCapture(path.join(app.getPath("userData"), "screenshots"), () => timer.sessionId, (id, domain) => {
+  focusProgress.record(id, "tabsClosed", "Distraction blocked · " + domain);
+  publishIronWillCue("angry", domain);
+  if (Notification.isSupported()) {
+    new Notification({ title: "IronWill · Distraction blocked", body: "Closing " + domain + ". Back to work.", silent: true }).show();
+  }
+  publishTimer();
+});
+app.on("before-quit", () => {
+  siteCapture.shutdown();
+  if (timer.sessionId) {
+    advanceTimer();
+    if (timer.sessionId) finishFocusProgress(false);
+  }
+});
+ipcMain.handle("site-capture-list", () => siteCapture.list());
+
+function publishTimer() {
+  siteCapture.update();
+  if (lastPublishedSession !== timer.sessionId) {
+    lastPublishedSession = timer.sessionId;
+    replyRoutes.clear();
+    dispatch({ action: "FOCUS_SESSION", id: timer.sessionId });
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("timer-state", { ...timer, progress: focusProgress.snapshot() });
+  }
+}
+
+function finishFocusProgress(completed, stakeCents = 0) {
+  try {
+    focusProgress.finish(timer.sessionId, timer.remainingSeconds, completed, stakeCents);
+    if (!completed) publishAnalyticsUpdate();
+  } catch (error) {
+    console.error("Could not save focus score", error);
   }
 }
 
@@ -412,6 +499,7 @@ function advanceTimer(now = Date.now()) {
   if (!remaining) {
     clearInterval(timerInterval);
     timer.endTime = null;
+    finishFocusProgress(true);
     timer.sessionId = null;
   }
   publishAnalyticsUpdate();
@@ -428,7 +516,7 @@ function runTimer(now, duration = timer.remainingSeconds * 1000) {
 
 ipcMain.handle("timer-get", () => {
   advanceTimer();
-  return timer;
+  return { ...timer, progress: focusProgress.snapshot() };
 });
 
 let pausedDuration = 0;
@@ -444,12 +532,16 @@ ipcMain.handle("timer-command", (_event, command, value, sessionId) => {
   if (command === "start" && !timer.sessionId && timer.plannedSeconds > 0) {
     timer.remainingSeconds = timer.plannedSeconds;
     timer.sessionId = require("node:crypto").randomUUID();
+    focusProgress.start(timer.sessionId, timer.plannedSeconds);
     runTimer(now);
+  } else if (command === "look-away" && timer.sessionId && timer.sessionId === sessionId && timer.endTime !== null) {
+    focusProgress.record(sessionId, "lookAways", "Looked away");
   } else if (command === "pause-gaze" && timer.sessionId === sessionId && timer.endTime !== null) {
     pausedDuration = timer.endTime - now;
     timer.gazePaused = true;
     timer.endTime = null;
     clearInterval(timerInterval);
+    focusProgress.record(timer.sessionId, null, "Gaze broken — timer paused");
     logActivity("LOOK_AWAY");
   } else if (command === "open-payment" && timer.sessionId && timer.sessionId === sessionId && !timer.paymentPaused) {
     timer.paymentPaused = true;
@@ -487,11 +579,15 @@ ipcMain.handle("timer-command", (_event, command, value, sessionId) => {
     timer.remainingSeconds = timer.plannedSeconds;
   }
   publishTimer();
-  return timer;
+  return { ...timer, progress: focusProgress.snapshot() };
 });
 
 ipcMain.handle("focus-vibrate", (_event, id) => {
-  if (id && timer.sessionId === id && hasConnectedCompanion()) dispatch({ action: "VIBRATE" });
+  if (id && timer.sessionId === id && hasConnectedCompanion()) {
+    dispatch({ action: "VIBRATE" });
+    focusProgress.record(id, null, "Phone buzz requested");
+    publishTimer();
+  }
 });
 
 ipcMain.handle("stats-add-lookaway", () => logActivity("LOOK_AWAY"));
@@ -509,6 +605,7 @@ ipcMain.handle("cancel-payment-verify", async (_event, id, wallet, signature) =>
   const verified = await verifyPayment(id, wallet, signature).catch(() => false);
   advanceTimer();
   if (!verified || timer.sessionId !== id) return false;
+  finishFocusProgress(false, verified.stakeCents);
   clearInterval(timerInterval);
   timer.sessionId = timer.endTime = null;
   timer.paymentPaused = timer.messagingPaused = timer.gazePaused = false;

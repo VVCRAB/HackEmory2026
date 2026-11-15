@@ -1,0 +1,4 @@
+Mallard (Anas platyrhynchos), XC62258, recorded by Jonathon Jongsma.
+Source: https://commons.wikimedia.org/wiki/File:Anas_platyrhynchos_-_Mallard_-_XC62258.ogg
+License: CC BY-SA 3.0, https://creativecommons.org/licenses/by-sa/3.0/
+The bundled recording is unchanged. IronWill varies playback volume, rate, and duration.

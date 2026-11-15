@@ -104,18 +104,6 @@
     return (minutes / 60).toFixed(1);
   }
 
-  function computeStreak(sessions) {
-    const days = new Set(sessions.map((item) => startOfDay(item.endedAt)));
-    let streak = 0;
-    let cursor = startOfDay(Date.now());
-    if (!days.has(cursor)) cursor -= DAY_MS;
-    while (days.has(cursor)) {
-      streak += 1;
-      cursor -= DAY_MS;
-    }
-    return streak;
-  }
-
   async function render() {
     if (!api || !isConnected) return;
     const request = ++requestId;
@@ -229,11 +217,8 @@
       topDetailEl.textContent = `${count} attempts blocked · ${shielded} hrs shielded`;
     }
 
-    const streak = sampleFocus ? sample.streak : computeStreak(sessions);
-    const streakEl = document.getElementById("stat-streak");
+    showStreak(stats.streak);
     const days = range === "today" ? 1 : range === "30" ? 30 : 7;
-    if (streakEl) streakEl.textContent = range === "today" ? streak + "-day streak"
-      : days + "-day avg · " + hoursLabel(minutes / days) + "h/day";
 
     const dailySummary = document.getElementById("stat-daily-summary");
     if (dailySummary) {
@@ -317,5 +302,9 @@
 
   window.addEventListener("focus:phone-status", event => setConnectionState(event.detail));
   showPairingGate();
+  function showStreak(streak) {
+    if (!Number.isSafeInteger(streak)) return;
+    document.getElementById("stat-streak").textContent = streak + "-session streak";
+  }
   api?.onAnalyticsUpdated?.(() => { if (isConnected) render(); });
 })();
