@@ -20,12 +20,12 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Focus Companion"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@mipmap/ironwill_launcher"
+        android:label="IronWill"
+        android:roundIcon="@mipmap/ironwill_launcher"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.Material3.Dark.NoActionBar">
+        android:theme="@style/Theme.FocusCompanion">
 
         <activity
             android:name=".MainActivity"
@@ -48,7 +48,8 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <activity android:name=".ConnectedActivity" android:exported="false" />
+        <activity android:name=".DebugActivity" android:exported="false" />
+        <activity android:name=".ConnectedActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".ScanIntroActivity" android:exported="false" />
         <service
             android:name=".AppNotificationListener"

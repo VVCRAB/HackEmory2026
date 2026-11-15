@@ -23,8 +23,45 @@
     window.focusAPI.onAnalyticsUpdated = callback => listeners.set("analytics", callback);
   }
   const api = window.focusAPI;
+  const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   let analyticsFrame;
+  let analyticsMotion = 0;
+  function playClass(element, name) {
+    element.classList.remove("iw-enter", "iw-leave");
+    if (reduceMotion()) return;
+    void element.offsetWidth;
+    element.classList.add(name);
+  }
+  function hideAnalytics() {
+    if (!analyticsFrame) return;
+    const motion = ++analyticsMotion;
+    const finish = () => {
+      if (motion !== analyticsMotion || !analyticsFrame || analyticsFrame.hidden) return;
+      analyticsFrame.hidden = true;
+      analyticsFrame.style.display = "none";
+      analyticsFrame.classList.remove("iw-leave", "iw-enter");
+      const dash = document.getElementById("study-dashboard");
+      if (dash && !reduceMotion()) {
+        dash.classList.remove("iw-return");
+        void dash.offsetWidth;
+        dash.classList.add("iw-return");
+      }
+      document.querySelector('[data-path="analytics"]')?.focus();
+    };
+    if (reduceMotion()) {
+      finish();
+      return;
+    }
+    playClass(analyticsFrame, "iw-leave");
+    const onEnd = (event) => {
+      if (event.target !== analyticsFrame || event.animationName !== "iw-view-out") return;
+      analyticsFrame.removeEventListener("animationend", onEnd);
+      finish();
+    };
+    analyticsFrame.addEventListener("animationend", onEnd);
+    window.setTimeout(finish, 260);
+  }
   function showAnalytics() {
     if (!analyticsFrame) {
       analyticsFrame = document.createElement("iframe");
@@ -49,13 +86,13 @@
           event.source.postMessage(response, "*");
           return;
         }
-        analyticsFrame.hidden = true;
-        analyticsFrame.style.display = "none";
-        document.querySelector('[data-path="analytics"]').focus();
+        hideAnalytics();
       });
     }
+    analyticsMotion++;
     analyticsFrame.hidden = false;
     analyticsFrame.style.display = "block";
+    playClass(analyticsFrame, "iw-enter");
     analyticsFrame.focus();
   }
 
@@ -87,7 +124,6 @@
       <img id="pair-qr" width="256" height="256" alt="Phone pairing QR code" hidden>
       <p id="pair-feedback" role="status"></p>
     </div>
-    <p><span id="pair-host"></span> <span id="pair-code"></span></p>
   </section>
 </div>
     `);
@@ -106,11 +142,13 @@
   let connected = false;
   let statusVersion = 0;
 
+  let pairMotion = 0;
   async function openModal() {
     if (connected) return;
     const request = ++openRequest;
-
-    pairModal.classList.remove("hidden");
+    pairMotion++;
+    delete pairModal.dataset.iwClosing;
+    pairModal.classList.remove("hidden", "iw-leave");
     pairModal.classList.add("flex");
     closePairModalBtn.focus({ preventScroll: true });
     refreshPairInfo();
@@ -127,7 +165,7 @@
       qr.hidden = false;
       feedback.textContent = "";
     } catch {
-      if (request === openRequest) feedback.textContent = "QR code unavailable. Use the address and code below.";
+      if (request === openRequest) feedback.textContent = "QR code unavailable. Close and reopen pairing to retry.";
     } finally {
       if (request === openRequest) spinner.hidden = true;
     }
@@ -135,8 +173,21 @@
 
   function closeModal() {
     openRequest += 1;
-    pairModal.classList.add("hidden");
-    pairModal.classList.remove("flex");
+    if (pairModal.classList.contains("hidden")) return;
+    const motion = ++pairMotion;
+    const finish = () => {
+      if (motion !== pairMotion) return;
+      pairModal.classList.add("hidden");
+      pairModal.classList.remove("flex", "iw-leave");
+      delete pairModal.dataset.iwClosing;
+    };
+    if (reduceMotion()) {
+      finish();
+      return;
+    }
+    pairModal.dataset.iwClosing = "1";
+    pairModal.classList.add("iw-leave");
+    window.setTimeout(finish, 170);
   }
 
   function applyCompanionStatus(info) {
@@ -157,10 +208,6 @@
     try {
       const version = statusVersion;
       const info = await api.getPairInfo();
-      const host = document.getElementById("pair-host");
-      const code = document.getElementById("pair-code");
-      if (host) host.textContent = `${info.ip}:${info.port}`;
-      if (code) code.textContent = `Code: ${info.code}`;
       if (version === statusVersion) applyCompanionStatus(info);
     } catch (error) {
       console.error("Unable to read phone connection", error);
@@ -183,6 +230,58 @@
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !pairModal.classList.contains("hidden")) closeModal();
   });
+
+  const nativeShowModal = HTMLDialogElement.prototype.showModal;
+  const nativeClose = HTMLDialogElement.prototype.close;
+  HTMLDialogElement.prototype.showModal = function showModalWithMotion(...args) {
+    this.classList.remove("iw-leave");
+    delete this.dataset.iwClosing;
+    const result = nativeShowModal.apply(this, args);
+    if (reduceMotion()) return result;
+    this.classList.remove("iw-enter");
+    void this.offsetWidth;
+    this.classList.add("iw-enter");
+    const dialog = this;
+    const drop = (event) => {
+      if (event.target !== dialog || event.animationName !== "iw-pop") return;
+      dialog.removeEventListener("animationend", drop);
+      dialog.classList.remove("iw-enter");
+    };
+    dialog.addEventListener("animationend", drop);
+    window.setTimeout(() => dialog.classList.remove("iw-enter"), 320);
+    return result;
+  };
+  HTMLDialogElement.prototype.close = function closeWithMotion(...args) {
+    if (!this.open) {
+      nativeClose.apply(this, args);
+      return;
+    }
+    if (this.dataset.iwClosing) return;
+    if (reduceMotion()) {
+      this.classList.remove("iw-leave", "iw-enter");
+      nativeClose.apply(this, args);
+      return;
+    }
+    const dialog = this;
+    dialog.dataset.iwClosing = "1";
+    dialog.classList.remove("iw-enter");
+    dialog.classList.add("iw-leave");
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      dialog.removeEventListener("animationend", onEnd);
+      delete dialog.dataset.iwClosing;
+      dialog.classList.remove("iw-leave");
+      nativeClose.apply(dialog, args);
+    };
+    const onEnd = (event) => {
+      if (event.target !== dialog || event.animationName !== "iw-pop-out") return;
+      finish();
+    };
+    dialog.addEventListener("animationend", onEnd);
+    window.setTimeout(finish, 220);
+  };
 
   document.addEventListener("DOMContentLoaded", () => {
     api?.onCompanionStatus?.(info => {

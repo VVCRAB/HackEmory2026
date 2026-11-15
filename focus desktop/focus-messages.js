@@ -200,19 +200,33 @@
     refresh(now);
   }
 
+  let panelMotion = 0;
   function setOpen(visible) {
+    const motion = ++panelMotion;
     if (!visible) {
       refresh();
       measuredAt = undefined;
     }
-    panel.hidden = !visible;
-    document.body.toggleAttribute("data-messages-open", visible);
-    open.setAttribute("aria-expanded", String(visible));
-    if (visible) {
-      tab = "emergency";
-      drawThread();
+    const apply = () => {
+      if (motion !== panelMotion) return;
+      panel.classList.remove("iw-leave");
+      delete panel.dataset.iwClosing;
+      panel.hidden = !visible;
+      document.body.toggleAttribute("data-messages-open", visible);
+      open.setAttribute("aria-expanded", String(visible));
+      if (visible) {
+        tab = "emergency";
+        drawThread();
+      }
+      refresh();
+    };
+    if (!visible && !panel.hidden && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      panel.dataset.iwClosing = "1";
+      panel.classList.add("iw-leave");
+      window.setTimeout(apply, 180);
+      return;
     }
-    refresh();
+    apply();
   }
 
   async function changePanel(visible) {

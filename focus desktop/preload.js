@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("focusAPI", {
   lockPhone: (payload) => ipcRenderer.invoke("phone-lock", payload),
   unlockPhone: (payload) => ipcRenderer.invoke("phone-unlock", payload),
   getAnalytics: (from, to) => ipcRenderer.invoke("get-analytics", from, to),
+  syncSettings: (settings) => ipcRenderer.invoke('sync-settings', settings),
   getStats: () => ipcRenderer.invoke("stats-get"),
   cancelPaymentQuote: id => ipcRenderer.invoke("cancel-payment-quote", id),
   verifyCancelPayment: (id, wallet, signature) => ipcRenderer.invoke("cancel-payment-verify", id, wallet, signature),

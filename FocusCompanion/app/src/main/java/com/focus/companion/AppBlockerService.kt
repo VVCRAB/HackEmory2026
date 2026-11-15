@@ -59,6 +59,7 @@ class AppBlockerService : AccessibilityService() {
         const val CODE = "desktop_pairing_code"
         const val PAIRING_ACK = "desktop_pairing_ack"
         const val PAIRING_REVISION = "desktop_pairing_revision"
+        internal val isDesktopConnected: Boolean get() = messageSocket != null
     }
 
     private var lastEmergencyToast = -2500L
@@ -70,7 +71,9 @@ class AppBlockerService : AccessibilityService() {
 
     private val reconnect = Runnable { connect() }
     private val urlChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == PAIRING_REVISION) connect()
+        if (key == PAIRING_REVISION) {
+            if (prefs.contains(PAIRING_REVISION)) connect() else disconnectDesktop()
+        }
     }
 
     override fun onServiceConnected() {
@@ -78,6 +81,18 @@ class AppBlockerService : AccessibilityService() {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         prefs.registerOnSharedPreferenceChangeListener(urlChanged)
         connect()
+    }
+
+    private fun disconnectDesktop() {
+        handler.removeCallbacks(reconnect)
+        val previous = socket
+        socket = null
+        messageSocket = null
+        focusSessionId = null
+        isLocked = false
+        blockedPackages = emptySet()
+        prefs.edit().remove(PAIRING_ACK).apply()
+        if (previous?.close(1000, "Disconnected by user") == false) previous.cancel()
     }
 
     private fun connect() {
@@ -88,6 +103,7 @@ class AppBlockerService : AccessibilityService() {
         socket = null
         isLocked = false
         blockedPackages = emptySet()
+        prefs.edit().remove(PAIRING_ACK).apply()
         val url = prefs.getString(URL, null) ?: return
         val code = prefs.getString(CODE, null) ?: return
         val revision = prefs.getString(PAIRING_REVISION, null) ?: return
@@ -100,7 +116,12 @@ class AppBlockerService : AccessibilityService() {
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 webSocket.send(JSONObject().put("action", "PAIR").put("code", code).toString())
-                Log.d("FocusWS", "Pairing request sent")
+                Log.d("FocusWS", "Socket open, pairing request sent")
+                handler.post {
+                    if (socket !== webSocket) return@post
+                    messageSocket = webSocket
+                    prefs.edit().putString(PAIRING_ACK, revision).apply()
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -127,12 +148,15 @@ class AppBlockerService : AccessibilityService() {
     private fun disconnected(webSocket: WebSocket, retry: Boolean = true) {
         handler.post {
             if (socket !== webSocket) return@post
+            val wasConnected = messageSocket === webSocket
             socket = null
             focusSessionId = null
             messageSocket = null
             isLocked = false
-            Log.d("FocusWS", if (retry) "Desktop disconnected, retrying" else "Pairing rejected, scan the current QR code")
-            if (retry) handler.postDelayed(reconnect, 2000)
+            prefs.edit().remove(PAIRING_ACK).apply()
+            val retryPairing = retry && !wasConnected
+            Log.d("FocusWS", if (retryPairing) "Desktop disconnected, retrying" else "Desktop disconnected")
+            if (retryPairing) handler.postDelayed(reconnect, 2000)
         }
     }
 
@@ -287,7 +311,10 @@ class AppBlockerService : AccessibilityService() {
         inventoryExecutor.shutdownNow()
         isLocked = false
         blockedPackages = emptySet()
-        if (::prefs.isInitialized) prefs.unregisterOnSharedPreferenceChangeListener(urlChanged)
+        if (::prefs.isInitialized) {
+            prefs.unregisterOnSharedPreferenceChangeListener(urlChanged)
+            disconnectDesktop()
+        }
         handler.removeCallbacksAndMessages(null)
         socket?.cancel()
         socket = null

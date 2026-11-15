@@ -1,7 +1,13 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.FocusCompanion" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+<resources>
+    <style name="Theme.FocusCompanion" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/iw_slate</item>
+        <item name="android:statusBarColor">@color/iw_slate</item>
+        <item name="android:navigationBarColor">@color/iw_slate</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowAnimationStyle">@style/IronWillActivityAnim</item>
+        <item name="colorPrimary">@color/iw_emerald</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSurface">@color/iw_slate</item>
+        <item name="colorOnSurface">@color/white</item>
     </style>
 </resources>

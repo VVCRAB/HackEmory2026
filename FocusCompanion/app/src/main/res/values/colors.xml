@@ -2,4 +2,11 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="iw_slate">#16181f</color>
+    <color name="iw_card">#1c1f28</color>
+    <color name="iw_border">#2b2f3c</color>
+    <color name="iw_emerald">#28a745</color>
+    <color name="iw_emerald_edge">#62d67a</color>
+    <color name="iw_muted">#a4a9b5</color>
+    <color name="iw_emerald_glow">#8028a745</color>
 </resources>

@@ -1,9 +1,24 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.FocusCompanion" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    <style name="Theme.FocusCompanion" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/iw_slate</item>
+        <item name="android:statusBarColor">@color/iw_slate</item>
+        <item name="android:navigationBarColor">@color/iw_slate</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+        <item name="android:forceDarkAllowed" tools:targetApi="29">false</item>
+        <item name="android:windowAnimationStyle">@style/IronWillActivityAnim</item>
+        <item name="colorPrimary">@color/iw_emerald</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSurface">@color/iw_slate</item>
+        <item name="colorOnSurface">@color/white</item>
+        <item name="android:textColorPrimary">@color/white</item>
+        <item name="android:textColorSecondary">@color/iw_muted</item>
     </style>
 
-    <style name="Theme.FocusCompanion" parent="Base.Theme.FocusCompanion" />
+    <style name="IronWillActivityAnim">
+        <item name="android:activityOpenEnterAnimation">@anim/iw_fade_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/iw_hold</item>
+        <item name="android:activityCloseEnterAnimation">@anim/iw_hold</item>
+        <item name="android:activityCloseExitAnimation">@anim/iw_fade_out</item>
+    </style>
 </resources>

@@ -10,6 +10,7 @@
   let cleanSince;
   let quacks = 0;
   let hide;
+  let leaveTimer;
   let calm;
   let updates = 0;
 
@@ -24,13 +25,37 @@
     stats.textContent = "Clean Streak " + Math.floor(seconds / 60) + ":" +
       String(seconds % 60).padStart(2, "0") + " · Quacks " + quacks;
   }
+  function hideToast() {
+    clearTimeout(hide);
+    if (!toast || toast.hidden || toast.dataset.iwClosing) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      toast.hidden = true;
+      return;
+    }
+    toast.dataset.iwClosing = "1";
+    toast.classList.add("iw-leave");
+    leaveTimer = setTimeout(() => {
+      toast.hidden = true;
+      toast.classList.remove("iw-leave");
+      delete toast.dataset.iwClosing;
+    }, 160);
+  }
+  function showToast() {
+    clearTimeout(leaveTimer);
+    delete toast.dataset.iwClosing;
+    toast.classList.remove("iw-leave");
+    toast.hidden = false;
+  }
   function sync(state) {
     if (session === state.sessionId) return;
     session = state.sessionId;
     cleanSince = Date.now();
     quacks = 0;
     clearTimeout(hide);
+    clearTimeout(leaveTimer);
     clearTimeout(calm);
+    delete toast.dataset.iwClosing;
+    toast.classList.remove("iw-leave");
     toast.hidden = true;
     focused();
     updateStats();
@@ -55,16 +80,16 @@
         "Back to the screen. Your duck is watching.",
       ];
       get("ironwill-comment").textContent = "IronWill: " + options[Math.floor(Math.random() * options.length)];
-      toast.hidden = false;
+      showToast();
       clearTimeout(hide);
       clearTimeout(calm);
-      hide = setTimeout(() => { toast.hidden = true; }, 4500);
+      hide = setTimeout(hideToast, 4500);
       calm = setTimeout(focused, 9000);
     }
     updateStats();
   }
 
-  get("ironwill-dismiss").addEventListener("click", () => { toast.hidden = true; });
+  get("ironwill-dismiss").addEventListener("click", hideToast);
   window.addEventListener("ironwill-gaze", () => react({ kind: "warning" }));
   api?.onIronWillCue(react);
   api?.onTimerState(state => { updates++; sync(state); });

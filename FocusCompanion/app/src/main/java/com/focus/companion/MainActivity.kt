@@ -1,40 +1,56 @@
 package com.focus.companion
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Button
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
+    private val pairingPrefs by lazy { getSharedPreferences(AppBlockerService.PREFS, MODE_PRIVATE) }
+    private var showingConnection = false
+    private val pairingListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == AppBlockerService.PAIRING_ACK) showConnectionIfReady()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        showingConnection = false
+        pairingPrefs.registerOnSharedPreferenceChangeListener(pairingListener)
+        showConnectionIfReady()
+    }
+
+    override fun onStop() {
+        pairingPrefs.unregisterOnSharedPreferenceChangeListener(pairingListener)
+        super.onStop()
+    }
+
+    private fun showConnectionIfReady() {
+        if (showingConnection || !AppBlockerService.isDesktopConnected) return
+        showingConnection = true
+        startActivity(Intent(this, ConnectedActivity::class.java))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applySystemBarInsets(findViewById(R.id.homeRoot))
 
-        val btnConnect = findViewById<Button>(R.id.btnConnect)
-        val accessibilityBtn = findViewById<Button>(R.id.accessibilityBtn) // Optional if present in layout
-
-        btnConnect.setOnClickListener {
-            val intent = Intent(this, ScanIntroActivity::class.java)
-            startActivity(intent)
+        findViewById<View>(R.id.btnConnect).setOnClickListener {
+            startActivity(Intent(this, ScanIntroActivity::class.java))
         }
-
-        findViewById<Button>(R.id.notificationAccessBtn).setOnClickListener {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        findViewById<View>(R.id.debugTouchZone).setOnClickListener {
+            startActivity(Intent(this, DebugActivity::class.java))
         }
+    }
+}
 
-        findViewById<Button>(R.id.testVibrationBtn).setOnClickListener {
-            val requested = playFocusVibration(this, "test button")
-            android.widget.Toast.makeText(
-                this,
-                if (requested) "Vibration requested" else "Vibration unavailable",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
-        }
-
-        accessibilityBtn?.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+internal fun applySystemBarInsets(root: View) {
+    ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+        insets
     }
 }

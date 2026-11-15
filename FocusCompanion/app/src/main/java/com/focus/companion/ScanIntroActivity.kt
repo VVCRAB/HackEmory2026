@@ -10,7 +10,7 @@ import androidx.activity.OnBackPressedCallback
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
-import android.widget.Button
+import android.view.View
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
@@ -75,9 +75,8 @@ class ScanIntroActivity : AppCompatActivity() {
 
     private fun showIntro() {
         setContentView(R.layout.activity_scan_intro)
-
-        val btnOpenScanner = findViewById<Button>(R.id.btnOpenScanner)
-        btnOpenScanner.setOnClickListener { openScanner() }
+        applySystemBarInsets(findViewById(R.id.scanIntroRoot))
+        findViewById<View>(R.id.btnOpenScanner).setOnClickListener { openScanner() }
     }
 
     private fun openScanner() {
@@ -104,6 +103,7 @@ class ScanIntroActivity : AppCompatActivity() {
     private fun switchToScannerView() {
         stopScanner()
         setContentView(R.layout.activity_qr_scanner)
+        applySystemBarInsets(findViewById(R.id.scanRoot))
         val viewFinder = findViewById<PreviewView>(R.id.viewFinder)
         if (viewFinder == null) {
             Log.e("FocusQR", "Scanner layout is missing its camera preview")
@@ -114,7 +114,7 @@ class ScanIntroActivity : AppCompatActivity() {
         isScanning = true
         scanBack.isEnabled = true
         val generation = ++scanGeneration
-        findViewById<Button>(R.id.btnCancelScan).setOnClickListener { cancelScan() }
+        findViewById<View>(R.id.btnCancelScan).setOnClickListener { cancelScan() }
         startCamera(viewFinder, generation)
     }
 

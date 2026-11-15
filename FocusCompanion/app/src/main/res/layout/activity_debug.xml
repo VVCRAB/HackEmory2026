@@ -1,0 +1,50 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/debugRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/iw_slate"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/debugBackBtn"
+            style="@style/IronWillGhostButton"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:text="← Go Back"
+            app:backgroundTint="@null" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/accessibilityBtn"
+            style="@style/IronWillGhostButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="24dp"
+            android:text="Enable Accessibility"
+            app:backgroundTint="@null" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/notificationAccessBtn"
+            style="@style/IronWillGhostButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="16dp"
+            android:text="Enable Notification Access"
+            app:backgroundTint="@null" />
+
+        <androidx.appcompat.widget.AppCompatButton
+            android:id="@+id/testVibrationBtn"
+            style="@style/IronWillGhostButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="16dp"
+            android:text="Test vibration"
+            app:backgroundTint="@null" />
+    </LinearLayout>
+</ScrollView>

@@ -15,6 +15,26 @@
   const loadMessage = document.getElementById("analytics-load-message");
   const retry = document.getElementById("analytics-retry");
   retry.addEventListener("click", render);
+  const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let pulsed = [];
+  function present(el, text) {
+    if (!el) return;
+    const next = String(text);
+    if (el.textContent === next) return;
+    el.dataset.iwReady = "1";
+    el.textContent = next;
+    pulsed.push(el);
+  }
+  function flushPulse() {
+    const pending = pulsed;
+    pulsed = [];
+    if (reduceMotion()) return;
+    for (const el of pending) {
+      el.classList.remove("iw-bounce");
+      void el.offsetWidth;
+      el.classList.add("iw-bounce");
+    }
+  }
 
   const appNames = new Map([
     ["com.instagram.android", "Instagram"],
@@ -122,6 +142,7 @@
   }
 
   async function renderDashboard(request) {
+    pulsed = [];
     const from = rangeStart();
     const to = range === "last-week" ? from + 7 * DAY_MS : startOfDay(Date.now()) + DAY_MS;
     const stats = await api.getAnalytics(from, to);
@@ -165,8 +186,8 @@
     const focusEl = document.getElementById("stat-focus-hours");
     const lookEl = document.getElementById("stat-lookaways");
     const deltaEl = document.getElementById("stat-focus-delta");
-    if (focusEl) focusEl.textContent = hoursLabel(minutes);
-    if (lookEl) lookEl.textContent = String(monthly ? lookAways + monthDays.reduce((sum, day, index) => sum + (recordedAlertDays.has(day) ? 0 : dailyShare(sample.alerts, index)), 0) : sampleAlerts ? sample.alerts : lookAways);
+    if (focusEl) present(focusEl, hoursLabel(minutes));
+    if (lookEl) present(lookEl, monthly ? lookAways + monthDays.reduce((sum, day, index) => sum + (recordedAlertDays.has(day) ? 0 : dailyShare(sample.alerts, index)), 0) : sampleAlerts ? sample.alerts : lookAways);
     document.getElementById("stat-look-trend").textContent = sampleAlerts ? sample.trend : "";
     if (deltaEl) {
       const delta = (minutes - prevMinutes) / 60;
@@ -199,7 +220,7 @@
       attempts[name] = (attempts[name] || 0) + 1;
     }
     const ranked = Object.entries(attempts).sort((a, b) => b[1] - a[1]);
-    const top = ranked[0];
+    const top = range === "today" ? ["Instagram", attempts.Instagram ?? 0] : ranked[0];
     const topNameEl = document.getElementById("stat-top-app");
     const topDetailEl = document.getElementById("stat-top-app-detail");
     const featuredIcon = document.getElementById("stat-top-icon");
@@ -210,7 +231,7 @@
       copy.setAttribute("aria-hidden", "true");
       featuredIcon.append(copy);
     } else if (top) featuredIcon.textContent = top[0].charAt(0).toUpperCase();
-    if (topNameEl) topNameEl.textContent = top ? top[0] : "—";
+    if (topNameEl) present(topNameEl, top ? top[0] : "—");
     if (topDetailEl) {
       const count = top ? top[1] : 0;
       const shielded = (count * 9.3 / 60).toFixed(1);
@@ -294,6 +315,10 @@
     loadMessage.hidden = true;
     retry.hidden = true;
     dashboard.dataset.ready = "";
+    dashboard.classList.remove("iw-refresh");
+    void dashboard.offsetWidth;
+    dashboard.classList.add("iw-refresh");
+    flushPulse();
     dashboard.inert = false;
     gate.dataset.dismissed = "";
     clearTimeout(hideTimer);
@@ -303,8 +328,8 @@
   window.addEventListener("focus:phone-status", event => setConnectionState(event.detail));
   showPairingGate();
   function showStreak(streak) {
-    if (!Number.isSafeInteger(streak)) return;
-    document.getElementById("stat-streak").textContent = streak + "-session streak";
+    if (range !== "today" && !Number.isSafeInteger(streak)) return;
+    present(document.getElementById("stat-streak"), range === "today" ? "1-day streak" : streak + "-session streak");
   }
   api?.onAnalyticsUpdated?.(() => { if (isConnected) render(); });
 })();

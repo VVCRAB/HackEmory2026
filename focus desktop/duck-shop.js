@@ -16,6 +16,7 @@
   const feedback = get("duck-shop-feedback");
   let profileState = loadProfile();
   let index = 0;
+  let shopMotion = 0;
   let earnedCents = 0;
   const format = cents => (cents / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
   const balanceCents = () => profileState.balanceCents + Math.max(0, earnedCents - profileState.creditedCents);
@@ -56,7 +57,15 @@
     const skin = skins[index];
     const owned = profileState.owned.includes(skin.id);
     const selected = profileState.selected === skin.id;
-    preview.src = "assets/ducks/" + skin.id + (owned ? "" : "-locked") + ".png";
+    const nextSrc = "assets/ducks/" + skin.id + (owned ? "" : "-locked") + ".png";
+    const changed = preview.getAttribute("src") !== nextSrc;
+    preview.src = nextSrc;
+    if (changed && preview.dataset.iwReady && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      preview.classList.remove("iw-tick");
+      void preview.offsetWidth;
+      preview.classList.add("iw-tick");
+    }
+    preview.dataset.iwReady = "1";
     preview.alt = owned ? skin.name : skin.name + " silhouette";
     preview.classList.toggle("locked", !owned);
     get("duck-name").textContent = skin.name;
@@ -81,6 +90,8 @@
     index = skins.findIndex(skin => skin.id === profileState.selected);
     feedback.textContent = "";
     render();
+    shopMotion++;
+    shop.classList.remove("iw-leave");
     shop.hidden = false;
     document.body.setAttribute("data-duck-shop", "");
     get("duck-shop-back").focus();
@@ -88,9 +99,21 @@
   get("duck-prev").addEventListener("click", () => move(-1));
   get("duck-next").addEventListener("click", () => move(1));
   function leaveShop() {
-    shop.hidden = true;
-    document.body.removeAttribute("data-duck-shop");
-    profile.focus();
+    if (shop.hidden) return;
+    const motion = ++shopMotion;
+    const finish = () => {
+      if (motion !== shopMotion) return;
+      shop.classList.remove("iw-leave");
+      shop.hidden = true;
+      document.body.removeAttribute("data-duck-shop");
+      profile.focus();
+    };
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      finish();
+      return;
+    }
+    shop.classList.add("iw-leave");
+    window.setTimeout(finish, 200);
   }
   get("duck-shop-back").addEventListener("click", leaveShop);
   shop.addEventListener("keydown", event => {

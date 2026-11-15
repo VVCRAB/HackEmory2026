@@ -1,0 +1,91 @@
+.iron-settings-ui #settings-entry {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+}
+body .iron-settings-ui button {
+  background: transparent !important;
+  border: 1px solid #2b2f3c !important;
+  color: #8b949e !important;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .16s, color .16s, scale .16s;
+}
+body .iron-settings-ui button:is(:hover, :focus-visible) {
+  border-color: #28a745 !important;
+  color: #fff !important;
+  scale: 1.02;
+}
+body .iron-settings-ui button:is([aria-pressed="true"], .settings-save) {
+  background: rgb(40 167 69 / 12%) !important;
+  border-color: #28a745 !important;
+  color: #fff !important;
+  box-shadow: 0 0 10px rgb(40 167 69 / 20%);
+}
+#iron-settings {
+  margin: auto;
+  width: min(660px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  background: #16181f;
+  color: #e7eaf0;
+  border: 1px solid #2b2f3c;
+  border-radius: 16px;
+  padding: 0;
+}
+#iron-settings[open] { display: flex; flex-direction: column; }
+#iron-settings::backdrop { background: rgb(0 0 0 / 65%); backdrop-filter: blur(4px); }
+#iron-settings :is(header, footer) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+}
+#iron-settings header { border-bottom: 1px solid #2b2f3c; }
+#iron-settings footer { border-top: 1px solid #2b2f3c; }
+#settings-title { font-size: 20px; font-weight: 650; }
+.settings-content { overflow: auto; padding: 0 22px; scrollbar-width: thin; scrollbar-color: #3a4252 transparent; }
+.settings-content section { padding: 18px 0; }
+.settings-content section + section { border-top: 1px solid #2b2f3c; }
+.settings-content h3 { margin-bottom: 12px; font-weight: 650; }
+.settings-group + .settings-group { margin-top: 10px; }
+.settings-group > :is(label, span) { display: block; margin-bottom: 6px; color: #aab0bb; font-size: 13px; }
+.settings-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+#iron-settings :is(input, textarea) {
+  display: block;
+  width: 100%;
+  background: #121419;
+  border: 1px solid #2b2f3c;
+  border-radius: 8px;
+  padding: 8px;
+  color: inherit;
+}
+#iron-settings textarea { min-height: 72px; resize: vertical; }
+#iron-settings :is(input, textarea):focus-visible { outline: 1px solid #28a745; }
+#settings-toast {
+  position: fixed;
+  bottom: 78px;
+  right: 24px;
+  z-index: 31;
+  border: 1px solid #28a745;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #16181f;
+  color: #e7eaf0;
+}
+.settings-note { padding: 12px 22px 0; color: #aab0bb; font-size: 12px; }
+body .iron-settings-ui #settings-entry {
+  padding: 0;
+  border: 0 !important;
+  border-radius: 50%;
+}
+#settings-entry .material-symbols-outlined {
+  display: block;
+  line-height: 1;
+}

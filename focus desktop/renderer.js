@@ -66,17 +66,38 @@
     return String(value).padStart(2, "0");
   }
 
+  function reduceMotion() {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function bounce(el) {
+    if (!el || reduceMotion()) return;
+    el.classList.remove("iw-bounce");
+    void el.offsetWidth;
+    el.classList.add("iw-bounce");
+  }
+
+  function paintDigit(el, value) {
+    if (!el) return;
+    const next = pad(value);
+    if (el instanceof HTMLInputElement && document.activeElement === el && !el.readOnly) return;
+    const current = el instanceof HTMLInputElement ? el.value : el.textContent;
+    if (el instanceof HTMLInputElement) el.value = next;
+    else el.textContent = next;
+    if (current === next || reduceMotion()) return;
+    el.classList.remove("iw-tick");
+    void el.offsetWidth;
+    el.classList.add("iw-tick");
+  }
+
   function updateDisplay() {
     const hrs = Math.floor(totalSeconds / 3600);
     const mins = Math.floor((totalSeconds % 3600) / 60);
     const secs = totalSeconds % 60;
-    document.getElementById("active-hours").textContent = pad(hrs);
-    document.getElementById("active-minutes").textContent = pad(mins);
-    document.getElementById("active-seconds").textContent = pad(secs);
-    for (const [index, value] of [hrs, mins, secs].entries()) {
-      const input = timerFields[index];
-      if (document.activeElement !== input || input.readOnly) input.value = pad(value);
-    }
+    paintDigit(document.getElementById("active-hours"), hrs);
+    paintDigit(document.getElementById("active-minutes"), mins);
+    paintDigit(document.getElementById("active-seconds"), secs);
+    [hrs, mins, secs].forEach((value, index) => paintDigit(timerFields[index], value));
   }
 
   function selectedApps() {
@@ -199,8 +220,13 @@
   function renderFocusProgress(progress, previousSession) {
     if (!progress) return;
     const streak = progress.streak + "-session streak";
-    const cardStreak = document.body.dataset.phoneState === "connected" ? 0 : progress.streak;
-    document.getElementById("today-streak").textContent = String(cardStreak);
+    const cardStreak = 0; // Pairing demo display.
+    const streakEl = document.getElementById("today-streak");
+    const nextStreak = String(cardStreak);
+    if (streakEl.textContent !== nextStreak) {
+      streakEl.textContent = nextStreak;
+      bounce(streakEl);
+    }
     document.getElementById("today-streak-unit").textContent = cardStreak === 1 ? "session" : "sessions";
     const stake = "$" + (progress.weekStakeCents / 100).toFixed(2);
     document.getElementById("focus-week-stake").textContent = "Staked in the last 7 days: " + stake + " USD";
@@ -221,7 +247,9 @@
     if (!result || result.id !== previousSession || focusSessionId) return;
     const dialog = document.getElementById("focus-result");
     document.getElementById("focus-result-title").textContent = result.completed ? "Session cleared" : "Early exit · streak reset";
-    document.getElementById("focus-result-score").textContent = result.score;
+    const scoreEl = document.getElementById("focus-result-score");
+    scoreEl.textContent = result.score;
+    bounce(scoreEl);
     const reward = document.getElementById("focus-result-reward");
     reward.hidden = !result.rewardCents;
     reward.textContent = result.rewardCents ? "+" + (result.rewardCents / 100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " breadcrumbs earned" : "";
@@ -945,6 +973,7 @@
     if (cancelDialog.open) return;
     document.getElementById("ironwill-payment-quip").textContent = "IronWill: My disappointment is immeasurable, and your wallet is about to be lighter.";
     cancelDialog.showModal();
+    window.dispatchEvent(new Event("ironwill-exit-warning"));
     await timerCommand("open-payment");
     if (!cancelDialog.open || id !== focusSessionId) return;
     cancelProgress.textContent = "";

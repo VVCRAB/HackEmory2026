@@ -188,7 +188,7 @@ function getLanIp() {
 
 function dispatch(payload, clients = sockets) {
   const recipients = [...clients].filter(ws => ws.readyState === WebSocket.OPEN);
-  console.info("[Phone WS] Dispatch", payload.action === "HELLO" ? { action: "HELLO" } : payload, `to ${recipients.length} client(s)`);
+  console.info("[Phone WS] Dispatch", payload.type === "SYNC_SETTINGS" ? { type: payload.type } : payload.action === "HELLO" ? { action: "HELLO" } : payload, `to ${recipients.length} client(s)`);
   const raw = JSON.stringify(payload);
   for (const ws of recipients) {
     ws.send(raw, error => {
@@ -311,8 +311,11 @@ function startWebSocketServer() {
 
 function createWindow() {
   Menu.setApplicationMenu(null);
+  const isWindows = process.platform === 'win32';
+  const iconPath = path.join(__dirname, 'assets', isWindows ? 'ironwill-icon.ico' : 'ironwill-icon.png');
   const win = new BrowserWindow({
     title: "IronWill",
+    icon: iconPath,
     width: 1320,
     height: 900,
     minWidth: 960,
@@ -326,6 +329,7 @@ function createWindow() {
       sandbox: false,
     },
   });
+  if (isWindows) win.setAppDetails({ appIconPath: iconPath, appIconIndex: 0 });
   win.loadFile(path.join(__dirname, "index.html"));
 }
 
@@ -338,6 +342,7 @@ function allowMedia(_webContents, permission, callback) {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'win32') app.setAppUserModelId('IronWill.Desktop');
   openActivityDatabase();
   session.defaultSession.setPermissionRequestHandler(allowMedia);
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
@@ -361,6 +366,12 @@ app.on("window-all-closed", () => {
     wss = null;
   }
   if (process.platform !== "darwin") app.quit();
+});
+
+ipcMain.handle("sync-settings", (_event, settings) => {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return;
+  if (JSON.stringify(settings).length > 4096 || !hasConnectedCompanion()) return;
+  dispatch({ type: "SYNC_SETTINGS", payload: settings });
 });
 
 ipcMain.handle("request-installed-apps", () => dispatch({ action: "GET_INSTALLED_APPS" }));
