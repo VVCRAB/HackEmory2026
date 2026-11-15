@@ -427,3 +427,79 @@ body:not([data-phone-state="connected"]) #shield-metrics > :last-child { border:
 
 #focus-result-reward { margin-bottom: 12px; }
 #focus-result-reward[hidden] { display: none; }
+
+/* IronWill button palette */
+:root {
+  --button-surface: #1d3029;
+  --button-hover: #294237;
+  --button-primary: #365744;
+  --button-primary-hover: #41664f;
+  --button-border: #405d4e;
+  --button-text: #e0ece4;
+}
+
+body :is(button, .app-tab) {
+  background: var(--button-surface) !important;
+  border-color: var(--button-border) !important;
+  color: var(--button-text) !important;
+}
+body :is(button:not(:disabled), .app-tab):hover {
+  background: var(--button-hover) !important;
+}
+body :is(
+  #session-toggle-btn, #connect-phone-btn, .phone-connect-button,
+  #duck-action, #end-focus-session, .cancel-primary,
+  .emergency-composer button, #focus-result button,
+  button[aria-pressed="true"], .app-tab[aria-current="page"]
+) {
+  background: var(--button-primary) !important;
+}
+body :is(
+  #session-toggle-btn, #connect-phone-btn, .phone-connect-button,
+  #duck-action, #end-focus-session, .cancel-primary,
+  .emergency-composer button, #focus-result button,
+  button[aria-pressed="true"], .app-tab[aria-current="page"]
+):not(:disabled):hover {
+  background: var(--button-primary-hover) !important;
+}
+body :is(button, .app-tab):focus-visible {
+  outline: 2px solid #8eb49e;
+  outline-offset: 2px;
+}
+body button:disabled { opacity: .55; }
+body input.phone-app-switch[type="checkbox"]:checked,
+body .app-toggle:checked + div {
+  background: var(--button-primary) !important;
+  border-color: var(--button-border) !important;
+}
+
+/* Keep the payment dialog's text and icon controls unfilled. */
+body #cancel-payment :is(.cancel-close, #cancel-link),
+body #cancel-payment :is(.cancel-close, #cancel-link):hover {
+  background: transparent !important;
+}
+body #cancel-payment .cancel-close { color: #a5a5a5 !important; }
+body #cancel-payment #cancel-link { color: #ff8157 !important; }
+
+#duck-shop { background: radial-gradient(ellipse at 55% 40%, #20242b 0%, #16181f 68%); }
+.duck-shop-header { max-width: 1060px; margin: 0 auto; }
+#duck-shop-back, .duck-shop-carousel button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.duck-shop-layout { min-height: calc(100vh - 114px); }
+.duck-preview-stage { position: relative; isolation: isolate; display: grid; place-items: center; }
+.duck-preview-stage::before, .duck-preview-stage::after { content: ""; position: absolute; pointer-events: none; z-index: -1; }
+.duck-preview-stage::before {
+  width: 89%; aspect-ratio: 1; border-radius: 50%;
+  background: radial-gradient(circle, #313936 0%, #262d2c 48%, #22282a 70%);
+  border: 1px solid #363e3e; box-shadow: 0 14px 42px #0d101666;
+}
+.duck-preview-stage::after {
+  bottom: 17%; width: 57%; height: 7%; border-radius: 50%;
+  background: #080c10; filter: blur(13px); opacity: .72;
+}
+#duck-preview { max-width: 100%; filter: drop-shadow(0 12px 14px #0b10145c); }
+@media (max-width: 680px) {
+  .duck-shop-layout { min-height: 0; justify-items: center; }
+  .duck-shop-details { text-align: center; }
+  .duck-shop-carousel { width: min(100%, 420px); }
+  .duck-preview-stage::before { width: min(84%, 32vh); }
+}

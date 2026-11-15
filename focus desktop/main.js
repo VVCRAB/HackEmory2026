@@ -312,6 +312,7 @@ function startWebSocketServer() {
 function createWindow() {
   Menu.setApplicationMenu(null);
   const win = new BrowserWindow({
+    title: "IronWill",
     width: 1320,
     height: 900,
     minWidth: 960,
